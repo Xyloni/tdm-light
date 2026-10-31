@@ -1,8 +1,8 @@
 services:
-  dropfarm:
+  tdm-light:
     build: .
-    image: dropfarm:local
-    container_name: dropfarm
+    image: tdm-light:local
+    container_name: tdm-light
     restart: unless-stopped
     init: true
     env_file:

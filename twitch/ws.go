@@ -194,7 +194,7 @@ func (c *GQLClient) pubsubOnce(ctx context.Context, onEvent func(topic string, m
 
 	listen, _ := json.Marshal(map[string]any{
 		"type":  "LISTEN",
-		"nonce": "dropfarm-" + c.Account.UserID,
+		"nonce": "tdm-light-" + c.Account.UserID,
 		"data": map[string]any{
 			"topics":     []string{"user-drop-events." + c.Account.UserID},
 			"auth_token": c.Account.OAuth,

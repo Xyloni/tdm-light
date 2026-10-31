@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"dropfarm/config"
-	"dropfarm/parser"
+	"github.com/xyloni/tdm-light/config"
+	"github.com/xyloni/tdm-light/parser"
 )
 
 const gqlURL = "https://gql.twitch.tv/gql"

@@ -9,5 +9,8 @@ data
 dropfarm.exe
 dropfarm-vps-ubuntu.tar.gz
 vps-linux/dropfarm-linux-*
+tdm-light.exe
+tdm-light-vps-ubuntu.tar.gz
+vps-linux/tdm-light-linux-*
 *.log
 *.tmp

@@ -12,10 +12,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"dropfarm/bot"
-	"dropfarm/config"
-	"dropfarm/parser"
-	"dropfarm/twitch"
+	"github.com/xyloni/tdm-light/bot"
+	"github.com/xyloni/tdm-light/config"
+	"github.com/xyloni/tdm-light/parser"
+	"github.com/xyloni/tdm-light/twitch"
 )
 
 const maxLogLines = 100 // глубина in-memory буфера логов на аккаунт

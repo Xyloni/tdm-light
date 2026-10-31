@@ -8,13 +8,13 @@ import (
 	"os/signal"
 	"syscall"
 
-	"dropfarm/config"
-	"dropfarm/parser"
-	"dropfarm/worker"
+	"github.com/xyloni/tdm-light/config"
+	"github.com/xyloni/tdm-light/parser"
+	"github.com/xyloni/tdm-light/worker"
 )
 
 func main() {
-	log.SetPrefix("[dropfarm] ")
+	log.SetPrefix("[tdm-light] ")
 	log.SetFlags(log.LstdFlags)
 
 	// Graceful shutdown по SIGINT/SIGTERM.

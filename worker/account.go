@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"dropfarm/parser"
-	"dropfarm/twitch"
+	"github.com/xyloni/tdm-light/parser"
+	"github.com/xyloni/tdm-light/twitch"
 )
 
 // accountWorker — горутина одного аккаунта внутри активной группы.

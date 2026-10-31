@@ -2,17 +2,17 @@
 set -euo pipefail
 
 bundle_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-app_dir="/opt/dropfarm"
-service_user="dropfarm"
+app_dir="/opt/tdm-light"
+service_user="tdm-light"
 
 if [[ ${EUID} -ne 0 ]]; then
-  echo "Установщик настраивает systemd и /opt/dropfarm; запрашиваю sudo."
+  echo "Установщик настраивает systemd и /opt/tdm-light; запрашиваю sudo."
   exec sudo -- "$0" "$@"
 fi
 
 case "$(uname -m)" in
-  x86_64|amd64) binary="dropfarm-linux-amd64" ;;
-  aarch64|arm64) binary="dropfarm-linux-arm64" ;;
+  x86_64|amd64) binary="tdm-light-linux-amd64" ;;
+  aarch64|arm64) binary="tdm-light-linux-arm64" ;;
   *) echo "Неизвестная архитектура сервера: $(uname -m)" >&2; exit 1 ;;
 esac
 
@@ -26,7 +26,7 @@ if ! id "$service_user" >/dev/null 2>&1; then
 fi
 
 install -d -o "$service_user" -g "$service_user" -m 0750 "$app_dir"
-install -o "$service_user" -g "$service_user" -m 0755 "$bundle_dir/$binary" "$app_dir/dropfarm"
+install -o "$service_user" -g "$service_user" -m 0755 "$bundle_dir/$binary" "$app_dir/tdm-light"
 
 if [[ ! -f "$app_dir/config.json" ]]; then
   install -o "$service_user" -g "$service_user" -m 0600 "$bundle_dir/config.json.example" "$app_dir/config.json"
@@ -115,16 +115,16 @@ fi
 chown "$service_user:$service_user" "$app_dir/config.json" "$app_dir/config.env" "$app_dir/accounts.txt"
 chmod 0600 "$app_dir/config.json" "$app_dir/config.env" "$app_dir/accounts.txt"
 
-install -o root -g root -m 0644 "$bundle_dir/dropfarm.service" /etc/systemd/system/dropfarm.service
+install -o root -g root -m 0644 "$bundle_dir/tdm-light.service" /etc/systemd/system/tdm-light.service
 systemctl daemon-reload
-systemctl enable dropfarm.service
-if systemctl is-active --quiet dropfarm.service; then
-  systemctl restart dropfarm.service
+systemctl enable tdm-light.service
+if systemctl is-active --quiet tdm-light.service; then
+  systemctl restart tdm-light.service
 else
-  systemctl start dropfarm.service
+  systemctl start tdm-light.service
 fi
 
 echo
-echo "Dropfarm установлен и запущен как systemd-служба."
+echo "tdm light установлен и запущен как systemd-служба."
 echo "Отправь Telegram-боту файл accounts.txt документом; он проверит его и перезагрузит майнер."
-echo "Логи службы: journalctl -u dropfarm -f"
+echo "Логи службы: journalctl -u tdm-light -f"

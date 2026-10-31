@@ -11,13 +11,16 @@
 /.gocache/
 /dropfarm.exe
 /dropfarm-vps-ubuntu.tar.gz
+/tdm-light.exe
+/tdm-light-vps-ubuntu.tar.gz
 /vps-linux/dropfarm-linux-*
+/vps-linux/tdm-light-linux-*
 /vps-linux/config.env.example
 /vps-linux/config.json.example
 *.log
 *.tmp
 
-# External reference project (not part of Dropfarm)
+# External reference project (not part of tdm light)
 /GrubDrops-2.2.0/
 
 # Editor and OS files

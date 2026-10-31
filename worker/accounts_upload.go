@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"dropfarm/parser"
+	"github.com/xyloni/tdm-light/parser"
 )
 
 // replaceAccountsFile validates an uploaded account list before replacing the

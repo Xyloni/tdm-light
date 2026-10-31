@@ -10,7 +10,7 @@ if [[ ! -e /dev/tty ]]; then
   exit 1
 fi
 repository="https://github.com/Xyloni/tdm-light.git"
-destination="${DROPFARM_DIR:-/opt/dropfarm}"
+destination="${TDMLIGHT_DIR:-/opt/tdm-light}"
 if [[ -e "$destination" ]]; then
   echo "Каталог уже существует: $destination" >&2
   exit 1

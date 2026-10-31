@@ -104,4 +104,4 @@ docker compose ps
 
 echo
 echo "Готово. Отправь accounts.txt Telegram-боту документом."
-echo "Логи контейнера: docker compose logs -f dropfarm"
+echo "Логи контейнера: docker compose logs -f tdm-light"

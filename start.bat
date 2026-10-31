@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 
-title Dropfarm
+title tdm light
 
 where go >nul 2>nul
 if errorlevel 1 (
@@ -69,8 +69,8 @@ if defined NEEDS_ACCOUNTS_SETUP (
 if not exist ".gocache" mkdir ".gocache"
 set "GOCACHE=%CD%\.gocache"
 
-echo Building Dropfarm...
-go build -o dropfarm.exe .
+echo Building tdm light...
+go build -o tdm-light.exe .
 if errorlevel 1 (
     echo.
     echo [ERROR] Build failed. Check the Go error messages above.
@@ -78,11 +78,11 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo Starting Dropfarm. Press Ctrl+C to stop.
+echo Starting tdm light. Press Ctrl+C to stop.
 echo.
-dropfarm.exe
+tdm-light.exe
 set "APP_EXIT=%ERRORLEVEL%"
 echo.
-echo Dropfarm exited with code %APP_EXIT%.
+echo tdm light exited with code %APP_EXIT%.
 pause
 exit /b %APP_EXIT%
