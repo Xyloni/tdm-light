@@ -1,70 +1,72 @@
 # Dropfarm
 
-Dropfarm is a Go service for managing Twitch Drops watch sessions across multiple accounts. It can run on Windows or as a Docker container on an Ubuntu VPS. Account lists and Telegram credentials are local runtime data and are not part of the source repository.
+Dropfarm — Go-майнер Twitch Drops для нескольких аккаунтов. Работает в Windows и в Docker на VPS. Список аккаунтов и секретные настройки хранятся только локально и не включаются в Git.
 
-## Features
+## Возможности
 
-- Runs account workers concurrently and staggers their initial start over the first minute.
-- Selects live channels from the target game with Drops enabled.
-- Sends minute watch heartbeats and refreshes an HLS playlist after a failed request.
-- Claims completed rewards and notifies the configured Telegram administrator.
-- Telegram controls: status, per-account logs, game selection, account-list upload, and reload.
-- Docker Compose deployment with persistent account and log storage.
+- Параллельная работа аккаунтов с равномерным запуском в течение первой минуты.
+- Поиск живых каналов выбранной игры с включёнными Drops.
+- HLS-проверка и minute-watched heartbeat с обновлением плейлиста при сбое.
+- Автоматический клейм наград и уведомления в Telegram.
+- Управление через Telegram: статус, логи, смена игры, загрузка аккаунтов и перезапуск.
+- Запуск на Ubuntu через Docker Compose с сохранением аккаунтов и логов между обновлениями.
 
-## Windows quick start
+## Windows
 
-1. Install Go 1.22 or newer.
-2. Run `start.bat`.
-3. On first launch, enter the Telegram bot token, your numeric Telegram ID, and confirm or change the game.
-4. If `accounts.txt` was missing, add accounts in the format below and run `start.bat` again.
+1. Установи Go 1.22 или новее.
+2. Запусти `start.bat`.
+3. При первом запуске введи токен Telegram-бота — ввод скрыт, свой числовой Telegram ID и подтверди или измени игру.
+4. Если `accounts.txt` отсутствует, заполни его по формату ниже и запусти `start.bat` ещё раз.
 
-The bot token is entered without echo. Existing settings are kept in the local `config.env` file.
+Настройки сохраняются в локальном `config.env`. Запускатель пересобирает программу перед стартом.
 
-## VPS quick start with Docker
+## Установка на VPS одной командой
 
-Docker Engine and the Docker Compose plugin must be installed on the VPS. Once the repository is public, the bootstrap script can clone the project, prompt for first-run settings, build the image, and start the container in one command:
+На VPS должны быть установлены Docker Engine и Docker Compose plugin. Выполни по SSH:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Xyloni/tdm-light/main/deploy/bootstrap-docker.sh | sudo bash
 ```
 
-The script clones this repository into `/opt/dropfarm`, then prompts for the Telegram bot token (hidden), Telegram administrator ID, and target game. The account list can be uploaded to the bot after it starts.
+Скрипт скачает проект в `/opt/dropfarm`, запросит токен Telegram-бота (ввод скрыт), Telegram ID администратора и целевую игру, соберёт Docker-образ и запустит контейнер. `accounts.txt` можно отправить боту документом после запуска.
 
-For a private repository, clone it using your normal Git credentials and run this single deployment command from the checkout:
+Аккаунты, логи и выбранная игра хранятся в `/opt/dropfarm/data`. Telegram-токен и ID находятся в `/opt/dropfarm/.env`; эти файлы исключены из Git.
 
-```bash
-bash ./deploy/install-docker.sh
-```
-
-The container uses the local `data/` directory for persistent account and log files. This also lets `/game <name>` save the selection across container restarts. The image supports `amd64` and `arm64` and builds from source; Go is not needed on the VPS.
-
-Useful Docker commands:
+Для обновления проекта:
 
 ```bash
-docker compose logs -f dropfarm
-docker compose ps
-docker compose restart dropfarm
-docker compose up -d --build
+cd /opt/dropfarm && git pull && sudo docker compose up -d --build
 ```
 
-## Telegram bot
+Полезные команды:
 
-Only the configured administrator Telegram ID can use commands or upload the account list.
+```bash
+cd /opt/dropfarm
+sudo docker compose ps
+sudo docker compose logs -f dropfarm
+sudo docker compose restart dropfarm
+```
 
-| Command / action | Result |
+Docker-образ собирается из исходников и поддерживает `amd64` и `arm64`. Устанавливать Go на VPS не требуется.
+
+## Telegram-бот
+
+Команды доступны только указанному администратору.
+
+| Команда или действие | Что делает |
 |---|---|
-| `/status` | Account counts, active group, claims, and uptime |
-| `/logs <login>` | Recent logs for one account |
-| `/game` | Show the current target game |
-| `/game <name>` | Save a new target game and reload the workers |
-| `/restart` | Reload configuration and the account list |
-| Send `accounts.txt` as a document | Validate, save, and reload the account list |
+| `/status` | Показывает аккаунты, активную группу, число клеймов и аптайм |
+| `/logs <login>` | Показывает последние логи аккаунта |
+| `/game` | Показывает текущую целевую игру |
+| `/game <название>` | Сохраняет новую игру и перезапускает майнинг |
+| `/restart` | Перечитывает настройки и список аккаунтов |
+| Отправить `accounts.txt` документом | Проверяет, сохраняет и загружает новый список аккаунтов |
 
-Completed rewards are also sent as Telegram notifications. Detailed campaign percentages are not exposed as a separate bot command; account logs show progress when Twitch returns an updated value.
+При получении награды бот отправляет уведомление. Отдельной команды со сводной таблицей процентов кампании пока нет; прогресс показывается в логах аккаунта, когда Twitch возвращает обновлённое значение.
 
-## Account file format
+## Формат `accounts.txt`
 
-One account per line, with six colon-separated fields:
+Один аккаунт на строку, шесть полей через двоеточие:
 
 ```text
 1:
@@ -72,31 +74,31 @@ email:login:password:oauth_token:user_ID:device_ID
 email:login:password:oauth_token:user_ID:device_ID
 ```
 
-Group markers such as `1:` are optional. Blank lines and lines beginning with `#` are ignored. The Telegram upload must be named `accounts.txt` and is limited to 2 MB.
+Маркеры групп вида `1:` необязательны. Пустые строки и строки, начинающиеся с `#`, игнорируются. Telegram принимает документ с точным именем `accounts.txt` размером до 2 МБ.
 
-## Configuration
+## Настройки
 
-`config.env.example` and `config.json.example` contain safe defaults. Windows uses local `config.env`. Docker keeps Telegram credentials in local `.env` and the selected game in `data/config.env`; all of these runtime files are excluded from Git.
+Примеры конфигурации находятся в `config.env.example` и `config.json.example`; в них нет действующих токенов.
 
-| Setting | Purpose |
+| Параметр | Назначение |
 |---|---|
-| `TARGET_GAME` | Game/category to farm |
-| `TELEGRAM_BOT_TOKEN` | Bot token from BotFather |
-| `TELEGRAM_ADMIN_ID` | Numeric Telegram user ID allowed to control the bot |
-| `ACCOUNTS_FILE` | Account file path; Docker sets `/data/accounts.txt` |
-| `HEARTBEAT_INTERVAL_SEC` | Watch heartbeat interval; default `60` |
-| `CAMPAIGN_POLL_INTERVAL_SEC` | Campaign progress polling interval |
-| `GROUP_SESSION_MINUTES` | Duration of each account group session; `0` disables rotation |
+| `TARGET_GAME` | Целевая игра или категория |
+| `TELEGRAM_BOT_TOKEN` | Токен бота от BotFather |
+| `TELEGRAM_ADMIN_ID` | Числовой Telegram ID администратора |
+| `ACCOUNTS_FILE` | Путь к списку аккаунтов; в Docker — `/data/accounts.txt` |
+| `HEARTBEAT_INTERVAL_SEC` | Интервал heartbeat, по умолчанию 60 секунд |
+| `CAMPAIGN_POLL_INTERVAL_SEC` | Интервал проверки прогресса кампании |
+| `GROUP_SESSION_MINUTES` | Длительность сессии группы; `0` отключает ротацию |
 
-## Build and verify
+## Сборка и проверки
 
 ```bash
 go test ./...
 go build .
 ```
 
-The Windows launcher builds the program before starting it. `build-vps.ps1` creates Linux `amd64` and `arm64` binaries for the non-Docker VPS bundle.
+`build-vps.ps1` создаёт отдельный комплект Linux-бинарников `amd64` и `arm64` без Docker.
 
-## Runtime data
+## Личные данные
 
-Never commit real `accounts.txt`, `config.env`, `config.json`, Docker `.env`, logs, or generated binaries. They are excluded by `.gitignore` and `.dockerignore`. Keep the VPS data volume and SSH access restricted because account files contain credentials.
+Не добавляй в Git реальные `accounts.txt`, `config.env`, `config.json`, Docker `.env`, логи или бинарники. Они исключены через `.gitignore` и `.dockerignore`. У аккаунтных файлов на VPS должны быть права доступа только для владельца.
