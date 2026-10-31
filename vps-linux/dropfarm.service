@@ -1,0 +1,22 @@
+[Unit]
+Description=Dropfarm Twitch Drops worker
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=dropfarm
+Group=dropfarm
+WorkingDirectory=/opt/dropfarm
+ExecStart=/opt/dropfarm/dropfarm
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/dropfarm
+
+[Install]
+WantedBy=multi-user.target

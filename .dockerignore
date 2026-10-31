@@ -1,0 +1,13 @@
+.git
+.gocache
+GrubDrops-2.2.0
+accounts.txt
+config.env
+config.json
+logs
+data
+dropfarm.exe
+dropfarm-vps-ubuntu.tar.gz
+vps-linux/dropfarm-linux-*
+*.log
+*.tmp
