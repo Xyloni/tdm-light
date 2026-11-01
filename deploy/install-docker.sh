@@ -45,7 +45,8 @@ get_setting() {
 }
 
 set_setting() {
-  local file="$1" key="$2" value="$3" tmp="$file.tmp" line replaced=0
+  local file="$1" key="$2" value="$3" line replaced=0
+  local tmp="$file.tmp"
   umask 077
   : > "$tmp"
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -103,5 +104,5 @@ docker compose up -d --build
 docker compose ps
 
 echo
-echo "Готово. Отправь accounts.txt Telegram-боту документом."
+echo "Готово. Отправь account.txt Telegram-боту документом."
 echo "Логи контейнера: docker compose logs -f tdm-light"

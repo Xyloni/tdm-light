@@ -39,7 +39,7 @@ func replaceAccountsFile(target string, content []byte) error {
 		return fmt.Errorf("не удалось закрыть временный файл: %w", err)
 	}
 	if _, err := parser.ParseFile(tmpPath); err != nil {
-		return fmt.Errorf("формат accounts.txt неверный (%w)", err)
+		return fmt.Errorf("формат account.txt неверный (%w)", err)
 	}
 	if err := os.Rename(tmpPath, target); err != nil {
 		return fmt.Errorf("не удалось заменить %s: %w", target, err)

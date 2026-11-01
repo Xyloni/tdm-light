@@ -22,12 +22,23 @@ const maxLogLines = 100 // глубина in-memory буфера логов на
 
 // AccountState — состояние и кольцевой буфер логов одного аккаунта.
 type AccountState struct {
-	Account      *parser.Account
-	LogFile      string
-	mu           sync.Mutex
-	Status       string
-	DropsClaimed int
-	logs         []string
+	Account         *parser.Account
+	LogFile         string
+	mu              sync.Mutex
+	Status          string
+	DropsReady      int
+	readyDrops      map[string]struct{}
+	authFailed      atomic.Bool
+	logs            []string
+	logNext         int
+	fileMu          sync.Mutex
+	CurrentDrop     string
+	CurrentMinutes  int
+	RequiredMinutes int
+	ProgressKnown   bool
+	ProgressChecked time.Time
+	rateSnapshot    rateSnapshot
+	rateRecoveries  int
 }
 
 func (s *AccountState) setStatus(v string) {
@@ -39,16 +50,17 @@ func (s *AccountState) setStatus(v string) {
 func (s *AccountState) addLog(line string) {
 	stamped := time.Now().Format("15:04:05") + " " + line
 	s.mu.Lock()
-	s.logs = append(s.logs, stamped)
-	if len(s.logs) > maxLogLines {
-		s.logs = append([]string(nil), s.logs[len(s.logs)-maxLogLines:]...)
+	if len(s.logs) < maxLogLines {
+		s.logs = append(s.logs, stamped)
+	} else {
+		s.logs[s.logNext] = stamped
 	}
+	s.logNext = (s.logNext + 1) % maxLogLines
 	s.mu.Unlock()
 	log.Printf("[%s] %s", s.Account.Login, line)
 	if s.LogFile != "" {
-		if f, err := os.OpenFile(s.LogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
-			fmt.Fprintln(f, time.Now().Format("2006-01-02 ")+stamped)
-			f.Close()
+		if err := s.appendFileLog(time.Now().Format("2006-01-02 ") + stamped + "\n"); err != nil {
+			log.Printf("[%s] запись лога: %v", s.Account.Login, err)
 		}
 	}
 }
@@ -56,10 +68,21 @@ func (s *AccountState) addLog(line string) {
 func (s *AccountState) tailLogs(n int) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.logs) > n {
-		return append([]string(nil), s.logs[len(s.logs)-n:]...)
+	if n <= 0 {
+		return nil
 	}
-	return append([]string(nil), s.logs...)
+	if n > len(s.logs) {
+		n = len(s.logs)
+	}
+	start := len(s.logs) - n
+	if len(s.logs) == maxLogLines {
+		start = (s.logNext + start) % maxLogLines
+	}
+	out := make([]string, n)
+	for i := range out {
+		out[i] = s.logs[(start+i)%len(s.logs)]
+	}
+	return out
 }
 
 // Manager управляет группами аккаунтов: фарм идёт поочерёдно группами,
@@ -73,11 +96,11 @@ type Manager struct {
 	reloadCh chan struct{}
 
 	started      time.Time
-	totalClaims  atomic.Int64
+	totalReady   atomic.Int64
 	currentGroup atomic.Int32
 }
 
-func NewManager(cfg *config.Config, groups [][]*parser.Account, reloadCh chan struct{}) *Manager {
+func NewManager(cfg *config.Config, groups [][]*parser.Account, reloadCh chan struct{}, states ...*bot.PollState) *Manager {
 	m := &Manager{
 		cfg:      cfg,
 		groups:   groups,
@@ -113,10 +136,10 @@ func NewManager(cfg *config.Config, groups [][]*parser.Account, reloadCh chan st
 				default:
 				}
 			}, func() string { return m.cfg.TargetGame }, func(game string) error {
-				return updateEnvSetting("config.env", "TARGET_GAME", game)
+				return saveTargetGame("config.env", game)
 			}, func(content []byte) error {
 				return replaceAccountsFile(cfg.AccountsFile, content)
-			})
+			}, states...)
 	} else {
 		log.Println("telegram-бот отключён (не заданы telegram_bot_token / telegram_admin_id)")
 	}
@@ -127,10 +150,20 @@ func NewManager(cfg *config.Config, groups [][]*parser.Account, reloadCh chan st
 // Возвращает true, если запрошена горячая перезагрузка (команда /restart).
 func (m *Manager) Run(parent context.Context) (reloaded bool) {
 	ctx, cancel := context.WithCancel(parent)
-	defer cancel()
+	botDone := make(chan struct{})
+	defer func() {
+		cancel()
+		<-botDone
+		m.http.CloseIdleConnections()
+	}()
 
 	if m.bot != nil {
-		go m.bot.Run(ctx)
+		go func() {
+			defer close(botDone)
+			m.bot.Run(ctx)
+		}()
+	} else {
+		close(botDone)
 	}
 	total := 0
 	for _, g := range m.groups {
@@ -138,7 +171,7 @@ func (m *Manager) Run(parent context.Context) (reloaded bool) {
 	}
 	log.Printf("загружено аккаунтов: %d, групп: %d, целевая игра: %q", total, len(m.groups), m.cfg.TargetGame)
 	if total == 0 {
-		log.Println("майнер ожидает accounts.txt; отправьте файл боту или добавьте его на сервер и выполните /restart")
+		log.Println("майнер ожидает account.txt; отправьте файл боту или добавьте его на сервер и выполните /restart")
 		select {
 		case <-m.reloadCh:
 			return true
@@ -148,6 +181,7 @@ func (m *Manager) Run(parent context.Context) (reloaded bool) {
 	}
 
 	for {
+		cycleStarted := time.Now()
 		for gi, group := range m.groups {
 			if parent.Err() != nil {
 				return false
@@ -156,6 +190,17 @@ func (m *Manager) Run(parent context.Context) (reloaded bool) {
 			if m.runGroup(ctx, group) {
 				return true // reload
 			}
+		}
+		// Completed or unauthorized groups must not cause an immediate retry loop.
+		timer := time.NewTimer(time.Until(cycleStarted.Add(time.Duration(maxInt(m.cfg.CampaignPollIntervalSec, 60)) * time.Second)))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false
+		case <-m.reloadCh:
+			timer.Stop()
+			return true
+		case <-timer.C:
 		}
 	}
 }
@@ -180,6 +225,9 @@ func (m *Manager) runGroup(ctx context.Context, group []*parser.Account) (reload
 	groupSize := len(group)
 	for i, acc := range group {
 		st := m.states[acc.Login]
+		if st.authFailed.Load() {
+			continue // Authorization is retried only after an explicit reload.
+		}
 		// Равномерно распределяем первичный запуск аккаунтов по первой минуте.
 		// После этой задержки каждый воркер остаётся активным и продолжает
 		// собственный цикл heartbeat без повторного стартового ожидания.
@@ -217,45 +265,32 @@ func (m *Manager) runGroup(ctx context.Context, group []*parser.Account) (reload
 
 // --- сводки для Telegram-бота ---
 
-func (m *Manager) statusText() string {
-	var farming, idle, errs int
-	for _, st := range m.states {
-		st.mu.Lock()
-		s := st.Status
-		st.mu.Unlock()
-		switch {
-		case strings.HasPrefix(s, "farm"):
-			farming++
-		case strings.HasPrefix(s, "error"):
-			errs++
-		default:
-			idle++
-		}
-	}
-	return fmt.Sprintf(
-		"🎮 Игра: %s\n👥 Аккаунтов: %d (фармят: %d · простой: %d · ошибок: %d)\n🔢 Группа: %d/%d\n🎁 Дропов получено: %d\n⏱ Аптайм: %s",
-		m.cfg.TargetGame, len(m.states), farming, idle, errs,
-		m.currentGroup.Load(), len(m.groups),
-		m.totalClaims.Load(), time.Since(m.started).Round(time.Second),
-	)
-}
-
 func (m *Manager) logsText(login string) string {
-	st, ok := m.states[login]
+	st, ok := m.states[strings.ToLower(login)]
 	if !ok {
 		return "Аккаунт не найден: " + login
 	}
+	st.mu.Lock()
+	progress := ""
+	if st.CurrentDrop != "" {
+		if st.ProgressKnown {
+			progress = fmt.Sprintf("🎯 %s: %d/%d мин (Twitch Inventory, проверено %s)\n", st.CurrentDrop, st.CurrentMinutes, st.RequiredMinutes, st.ProgressChecked.Format("15:04:05"))
+		} else {
+			progress = "🎯 " + st.CurrentDrop + ": личный прогресс пока не получен из Twitch Inventory\n"
+		}
+	}
+	st.mu.Unlock()
 	lines := st.tailLogs(50)
 	if len(lines) == 0 {
 		return "Логов пока нет."
 	}
-	return strings.Join(lines, "\n")
+	return progress + strings.Join(lines, "\n")
 }
 
-func (m *Manager) notifyClaim(acc *parser.Account, drop twitch.Drop) {
-	m.totalClaims.Add(1)
+func (m *Manager) notifyReady(acc *parser.Account, drop twitch.Drop) {
+	m.totalReady.Add(1)
 	if m.bot != nil {
-		m.bot.Notify(fmt.Sprintf("🎁 Дроп получен!\nАккаунт: %s\nДроп: %s\nКампания: %s",
+		m.bot.Notify(fmt.Sprintf("🎁 Время для дропа набрано! Получение вручную.\nАккаунт: %s\nДроп: %s\nКампания: %s",
 			acc.Login, drop.Name, drop.CampaignName))
 	}
 }

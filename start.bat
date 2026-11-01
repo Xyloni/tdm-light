@@ -30,12 +30,17 @@ if not exist "config.env" (
     )
 )
 
-if not exist "accounts.txt" (
-    if exist "accounts.txt.example" (
-        copy /Y "accounts.txt.example" "accounts.txt" >nul
-        echo Created accounts.txt from the example.
+if not exist "account.txt" if exist "accounts.txt" (
+    move "accounts.txt" "account.txt" >nul
+    if errorlevel 1 exit /b 1
+)
+
+if not exist "account.txt" (
+    if exist "account.txt.example" (
+        copy /Y "account.txt.example" "account.txt" >nul
+        echo Created account.txt from the example.
     ) else (
-        echo [ERROR] accounts.txt and accounts.txt.example are both missing.
+        echo [ERROR] account.txt and account.txt.example are both missing.
         pause
         exit /b 1
     )
@@ -60,7 +65,7 @@ if errorlevel 1 (
 
 if defined NEEDS_ACCOUNTS_SETUP (
     echo.
-    echo Replace the sample rows in accounts.txt with your real account data.
+    echo Replace the sample rows in account.txt with your real account data.
     echo Then run start.bat again.
     pause
     exit /b 0

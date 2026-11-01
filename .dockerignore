@@ -1,6 +1,7 @@
 .git
 .gocache
 GrubDrops-2.2.0
+account.txt
 accounts.txt
 config.env
 config.json

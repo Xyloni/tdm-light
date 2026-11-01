@@ -7,6 +7,16 @@ import (
 	"strings"
 )
 
+// Environment configuration keeps its documented priority. Do not report a
+// successful change when that environment would silently undo it on reload.
+func saveTargetGame(filePath, game string) error {
+	game = strings.TrimSpace(game)
+	if configured, ok := os.LookupEnv("TARGET_GAME"); ok && configured != game {
+		return fmt.Errorf("TARGET_GAME задан в окружении; измените его там или удалите переменную и перезапустите сервис")
+	}
+	return updateEnvSetting(filePath, "TARGET_GAME", game)
+}
+
 func updateEnvSetting(filePath, key, value string) error {
 	value = strings.TrimSpace(value)
 	if value == "" || strings.ContainsAny(value, "\r\n") {

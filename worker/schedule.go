@@ -2,6 +2,18 @@ package worker
 
 import "time"
 
+// Advance a fixed schedule past missed slots without a burst of catch-up calls.
+func signalDeadline(previous, started, now time.Time, interval time.Duration) time.Time {
+	if previous.IsZero() {
+		previous = started
+	}
+	next := previous.Add(interval)
+	if !next.After(now) {
+		next = next.Add((now.Sub(next)/interval + 1) * interval)
+	}
+	return next
+}
+
 // startupDelay spreads account starts evenly across the first minute.
 func startupDelay(index, count int) time.Duration {
 	if count <= 1 || index <= 0 {

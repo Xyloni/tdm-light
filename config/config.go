@@ -4,30 +4,31 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
 
 // Config — вся конфигурация сервиса.
 type Config struct {
-	TargetGame              string `json:"target_game"`               // ключевая игра для фарма
-	ClientID                string `json:"client_id"`                 // Client-ID клиента, которым выданы OAuth-токены
-	TelegramBotToken        string `json:"telegram_bot_token"`        // токен TG-бота
-	TelegramAdminID         int64  `json:"telegram_admin_id"`         // ID администратора (chat_id)
-	AccountsFile            string `json:"accounts_file"`             // путь к accounts.txt
-	HeartbeatIntervalSec    int    `json:"heartbeat_interval_sec"`    // интервал minute-watch heartbeat
-	CampaignPollIntervalSec int    `json:"campaign_poll_interval_sec"`// интервал опроса прогресса дропов
-	JitterSec               int    `json:"jitter_sec"`                // ± секунд случайного разброса
-	GroupSessionMinutes     int    `json:"group_session_minutes"`     // длительность сессии группы (0 = до конца кампаний)
-	LogDir                  string `json:"log_dir"`                   // каталог текстовых логов аккаунтов
-	UsePubSub               bool   `json:"use_pubsub"`                // опциональный WebSocket PubSub для событий дропов
+	TargetGame              string `json:"target_game"`                // ключевая игра для фарма
+	ClientID                string `json:"client_id"`                  // Client-ID клиента, которым выданы OAuth-токены
+	TelegramBotToken        string `json:"telegram_bot_token"`         // токен TG-бота
+	TelegramAdminID         int64  `json:"telegram_admin_id"`          // ID администратора (chat_id)
+	AccountsFile            string `json:"accounts_file"`              // путь к account.txt
+	HeartbeatIntervalSec    int    `json:"heartbeat_interval_sec"`     // интервал beacon, минимум 60 секунд; HLS отдельно каждые 20 секунд
+	CampaignPollIntervalSec int    `json:"campaign_poll_interval_sec"` // интервал опроса прогресса дропов
+	JitterSec               int    `json:"jitter_sec"`                 // ± секунд случайного разброса
+	GroupSessionMinutes     int    `json:"group_session_minutes"`      // длительность сессии группы (0 = до конца кампаний)
+	LogDir                  string `json:"log_dir"`                    // каталог текстовых логов аккаунтов
+	UsePubSub               bool   `json:"use_pubsub"`                 // опциональный WebSocket PubSub для событий дропов
 }
 
 // Default возвращает конфигурацию с безопасными значениями по умолчанию.
 func Default() *Config {
 	return &Config{
 		ClientID:                "kd1unb4b3q4t58fwlpcbzcbnm76a8fp", // Client-ID приложения Twitch для Android
-		AccountsFile:            "accounts.txt",
+		AccountsFile:            "account.txt",
 		HeartbeatIntervalSec:    60,
 		CampaignPollIntervalSec: 120,
 		JitterSec:               20,
@@ -51,6 +52,10 @@ func Load(jsonPath, envPath string) (*Config, error) {
 
 	applyEnvFile(cfg, envPath)
 	applyOSEnv(cfg)
+	// Normalize the previous conventional filename, including absolute Docker paths.
+	if filepath.Base(cfg.AccountsFile) == "accounts.txt" {
+		cfg.AccountsFile = filepath.Join(filepath.Dir(cfg.AccountsFile), "account.txt")
+	}
 
 	if strings.TrimSpace(cfg.TargetGame) == "" {
 		return nil, fmt.Errorf("target_game не задан ни в config.json, ни в окружении")

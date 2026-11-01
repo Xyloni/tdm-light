@@ -1,6 +1,6 @@
 # tdm light for Ubuntu Server
 
-This standalone bundle targets Ubuntu Server 26.04.1 on `amd64` and `arm64`. It includes prebuilt Go binaries, so Go does not need to be installed on the VPS.
+This standalone bundle targets Ubuntu Server 26.04.1 on `amd64` and `arm64`. Run `build-vps.ps1` from the repository root on Windows to produce the binaries, configuration templates, and `tdm-light-vps-ubuntu.tar.gz`. These generated files are excluded from Git. Go does not need to be installed on the VPS.
 
 ## Install
 
@@ -15,7 +15,9 @@ This standalone bundle targets Ubuntu Server 26.04.1 on `amd64` and `arm64`. It 
 
 The installer prompts for the Telegram bot token (input is hidden), administrator Telegram ID, and target game. Press Enter to keep the existing game. It creates the restricted `tdm-light` system user and starts `tdm-light.service`.
 
-The service starts with an empty account list and waits for a bot upload. Send `accounts.txt` to the configured bot as a document. The bot validates and saves it under `/opt/tdm-light`, then reloads the miner.
+The service starts with an empty account list and waits for a bot upload. Send any `.txt` document (up to 2 MiB) to the configured bot. It validates and saves the list as `/opt/tdm-light/account.txt`, then reloads the miner. An existing legacy `accounts.txt` is migrated when the new filename is absent.
+
+The miner accumulates watch time and leaves claiming rewards to the user. `/status` includes crediting speed and lagging accounts after at least ten minutes of observations; `/logs <login>` shows confirmed Inventory minutes. HLS runs every 20 seconds, beacon events every minute, and Inventory polling every two minutes by default. Persistently slow crediting triggers channel recovery with a 10–12 minute cooldown.
 
 ## Operations
 
@@ -25,7 +27,7 @@ sudo journalctl -u tdm-light -f
 sudo systemctl restart tdm-light
 ```
 
-The bot supports `/status`, `/logs <login>`, `/game`, `/game <name>`, `/restart`, reward notifications, and uploading `accounts.txt`. `/game <name>` changes the target and reloads the miner. You can also edit `TARGET_GAME` in `/opt/tdm-light/config.env` and use `/restart`.
+The bot supports `/status`, `/logs <login>`, `/game`, `/game <name>`, `/restart`, reward notifications, and uploading `account.txt`. `/game <name>` changes the target and reloads the miner. You can also edit `TARGET_GAME` in `/opt/tdm-light/config.env` and use `/restart`.
 
 The account list and Telegram credentials are stored on the server with owner-only file permissions. Keep SSH access restricted to trusted administrators.
 
@@ -33,7 +35,7 @@ The account list and Telegram credentials are stored on the server with owner-on
 
 # tdm light для Ubuntu Server
 
-Этот отдельный комплект предназначен для Ubuntu Server 26.04.1 на `amd64` и `arm64`. Внутри уже есть Linux-бинарники, поэтому устанавливать Go на VPS не нужно.
+Этот отдельный комплект предназначен для Ubuntu Server 26.04.1 на `amd64` и `arm64`. Запусти `build-vps.ps1` из корня репозитория в Windows: он создаст бинарники, шаблоны настроек и `tdm-light-vps-ubuntu.tar.gz`. Эти генерируемые файлы исключены из Git. Устанавливать Go на VPS не нужно.
 
 ## Установка
 
@@ -48,7 +50,9 @@ The account list and Telegram credentials are stored on the server with owner-on
 
 Установщик запросит токен Telegram-бота (ввод скрыт), Telegram ID администратора и целевую игру. Нажми Enter, чтобы оставить прежнюю игру. Установщик создаст системного пользователя `tdm-light` с ограниченными правами и запустит службу `tdm-light.service`.
 
-Сначала служба запускается с пустым списком аккаунтов и ждёт загрузки через бота. Отправь настроенному боту `accounts.txt` документом. Бот проверит файл, сохранит его в `/opt/tdm-light` и перезапустит майнер.
+Сначала служба запускается с пустым списком аккаунтов и ждёт загрузки через бота. Отправь любой `.txt` документом (до 2 МиБ). Бот проверит файл, сохранит его как `/opt/tdm-light/account.txt` и перезапустит майнер. Старый `accounts.txt` переносится, если нового файла ещё нет.
+
+Программа набирает время просмотра, получение наград выполняется вручную. `/status` показывает скорость начисления и отстающие аккаунты после минимум десяти минут наблюдения; `/logs <логин>` — подтверждённые минуты Inventory. HLS проверяется каждые 20 секунд, beacon отправляется раз в минуту, Inventory опрашивается раз в две минуты по умолчанию. При устойчивом недоборе программа восстанавливает просмотр с паузой 10–12 минут между попытками.
 
 ## Управление
 
@@ -58,6 +62,6 @@ sudo journalctl -u tdm-light -f
 sudo systemctl restart tdm-light
 ```
 
-Бот поддерживает `/status`, `/logs <логин>`, `/game`, `/game <название>`, `/restart`, уведомления о наградах и загрузку `accounts.txt`. Команда `/game <название>` меняет игру и перезапускает майнер. Можно также изменить `TARGET_GAME` в `/opt/tdm-light/config.env` и выполнить `/restart`.
+Бот поддерживает `/status`, `/logs <логин>`, `/game`, `/game <название>`, `/restart`, уведомления о наградах и загрузку `account.txt`. Команда `/game <название>` меняет игру и перезапускает майнер. Можно также изменить `TARGET_GAME` в `/opt/tdm-light/config.env` и выполнить `/restart`.
 
 Список аккаунтов и настройки Telegram хранятся на сервере с доступом только владельца файла. Ограничь SSH-доступ доверенными администраторами.

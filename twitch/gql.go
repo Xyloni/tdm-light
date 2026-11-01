@@ -110,11 +110,14 @@ type Drop struct {
 	Current        int // нафармленные минуты
 	IsClaimed      bool
 	DropInstanceID string // появляется, когда дроп готов к клейму
+	ProgressKnown  bool   // личные минуты подтверждены Inventory, а не каталогом
 }
 
-// DropsDashboard — активные кампании и прогресс дропов аккаунта.
+// DropsDashboard merges campaign discovery with account-specific Inventory.
+// The catalog's self fields can be empty/stale even while watch time accrues.
+// Both selections use one request, keeping polling cost bounded per account.
 func (c *GQLClient) DropsDashboard(ctx context.Context) ([]Drop, error) {
-	const query = `query ViewerDropsDashboard {
+	const query = `query Inventory {
   currentUser {
     dropCampaigns {
       id
@@ -125,41 +128,64 @@ func (c *GQLClient) DropsDashboard(ctx context.Context) ([]Drop, error) {
         id
         name
         requiredMinutesWatched
+        self { isClaimed }
+      }
+    }
+    inventory {
+      dropCampaignsInProgress {
+        id
+        name
+        status
+        game { name }
+        timeBasedDrops {
+          id
+          name
+          requiredMinutesWatched
         self { currentMinutesWatched isClaimed dropInstanceID }
+        }
       }
     }
   }
 }`
+	type campaign struct {
+		ID     string `json:"id"`
+		Name   string `json:"name"`
+		Status string `json:"status"`
+		Game   *struct {
+			Name string `json:"name"`
+		} `json:"game"`
+		TimeBasedDrops []struct {
+			ID       string `json:"id"`
+			Name     string `json:"name"`
+			Required int    `json:"requiredMinutesWatched"`
+			Self     *struct {
+				Current    *int   `json:"currentMinutesWatched"`
+				Claimed    bool   `json:"isClaimed"`
+				InstanceID string `json:"dropInstanceID"`
+			} `json:"self"`
+		} `json:"timeBasedDrops"`
+	}
 	var data struct {
 		CurrentUser *struct {
-			DropCampaigns []struct {
-				ID     string `json:"id"`
-				Name   string `json:"name"`
-				Status string `json:"status"`
-				Game   *struct {
-					Name string `json:"name"`
-				} `json:"game"`
-				TimeBasedDrops []struct {
-					ID                     string `json:"id"`
-					Name                   string `json:"name"`
-					RequiredMinutesWatched int    `json:"requiredMinutesWatched"`
-					Self                   *struct {
-						CurrentMinutesWatched int    `json:"currentMinutesWatched"`
-						IsClaimed             bool   `json:"isClaimed"`
-						DropInstanceID        string `json:"dropInstanceID"`
-					} `json:"self"`
-				} `json:"timeBasedDrops"`
-			} `json:"dropCampaigns"`
+			DropCampaigns []campaign `json:"dropCampaigns"`
+			Inventory     *struct {
+				Campaigns []campaign `json:"dropCampaignsInProgress"`
+			} `json:"inventory"`
 		} `json:"currentUser"`
 	}
-	if err := c.do(ctx, "ViewerDropsDashboard", query, nil, &data); err != nil {
+	if err := c.do(ctx, "Inventory", query, nil, &data); err != nil {
 		return nil, err
 	}
 	if data.CurrentUser == nil {
 		return nil, fmt.Errorf("авторизация не удалась (currentUser == null) — проверьте oauth_token")
 	}
+	if data.CurrentUser.Inventory == nil {
+		return nil, fmt.Errorf("Inventory: Twitch не вернул инвентарь; личный прогресс неизвестен")
+	}
 	var out []Drop
-	for _, camp := range data.CurrentUser.DropCampaigns {
+	type dropKey struct{ campaign, drop string }
+	positions := make(map[dropKey]int)
+	appendCampaign := func(camp campaign, personal bool) {
 		gameName := ""
 		if camp.Game != nil {
 			gameName = camp.Game.Name
@@ -172,15 +198,51 @@ func (c *GQLClient) DropsDashboard(ctx context.Context) ([]Drop, error) {
 				CampaignName:   camp.Name,
 				CampaignStatus: camp.Status,
 				GameName:       gameName,
-				Required:       d.RequiredMinutesWatched,
+				Required:       d.Required,
 			}
 			if d.Self != nil {
-				drop.Current = d.Self.CurrentMinutesWatched
-				drop.IsClaimed = d.Self.IsClaimed
-				drop.DropInstanceID = d.Self.DropInstanceID
+				drop.IsClaimed = d.Self.Claimed
+				if personal && d.Self.Current != nil {
+					drop.Current = *d.Self.Current
+					drop.DropInstanceID = d.Self.InstanceID
+					drop.ProgressKnown = true
+				}
 			}
+			key := dropKey{camp.ID, d.ID}
+			if index, exists := positions[key]; exists {
+				// Inventory is authoritative for personal progress. Retain catalog
+				// metadata when Twitch omits it from the inventory entry.
+				previous := out[index]
+				if drop.Name == "" {
+					drop.Name = previous.Name
+				}
+				if drop.GameName == "" {
+					drop.GameName = previous.GameName
+				}
+				if drop.CampaignName == "" {
+					drop.CampaignName = previous.CampaignName
+				}
+				if drop.CampaignStatus == "" {
+					drop.CampaignStatus = previous.CampaignStatus
+				}
+				if drop.Required == 0 {
+					drop.Required = previous.Required
+				}
+				if d.Self == nil {
+					drop.IsClaimed = previous.IsClaimed
+				}
+				out[index] = drop
+				continue
+			}
+			positions[key] = len(out)
 			out = append(out, drop)
 		}
+	}
+	for _, camp := range data.CurrentUser.DropCampaigns {
+		appendCampaign(camp, false)
+	}
+	for _, camp := range data.CurrentUser.Inventory.Campaigns {
+		appendCampaign(camp, true)
 	}
 	return out, nil
 }
@@ -326,28 +388,6 @@ func (c *GQLClient) TopStreams(ctx context.Context, gameName string, _ int) ([]S
 	return out, nil
 }
 
-// ClaimDrop — клейм готового дропа по dropInstanceID.
-func (c *GQLClient) ClaimDrop(ctx context.Context, dropInstanceID string) error {
-	const query = `mutation ClaimDropRewards($input: ClaimDropRewardsInput!) {
-  claimDropRewards(input: $input) { status }
-}`
-	var data struct {
-		ClaimDropRewards *struct {
-			Status string `json:"status"`
-		} `json:"claimDropRewards"`
-	}
-	err := c.do(ctx, "ClaimDropRewards", query, map[string]any{
-		"input": map[string]any{"dropInstanceID": dropInstanceID},
-	}, &data)
-	if err != nil {
-		return err
-	}
-	if data.ClaimDropRewards == nil {
-		return fmt.Errorf("claimDropRewards: пустой ответ")
-	}
-	return nil
-}
-
 // PlaybackAccessToken — токен и подпись для доступа к плейлистам канала.
 func (c *GQLClient) PlaybackAccessToken(ctx context.Context, channelLogin string) (token, signature string, err error) {
 	const query = `query PlaybackAccessToken($login: String!) {
@@ -382,14 +422,42 @@ type HeartbeatResult struct {
 	Method     string
 	VariantURL string
 	Warning    string
+	HLSFailed  bool // Still unavailable after refreshing; select another channel.
 }
 
 // WatchHeartbeat checks the media playlist and sends the minute-watched
 // event. If the signed playlist has expired, it resolves a fresh one and
 // retries once before reporting a partial success.
 func (c *GQLClient) WatchHeartbeat(ctx context.Context, variantURL string, stream Stream) (HeartbeatResult, error) {
+	result, playlistErr := c.WatchHLS(ctx, variantURL, stream)
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	beaconErr := c.sendMinuteWatched(ctx, stream)
+	switch {
+	case playlistErr == nil && beaconErr == nil:
+		result.Method = "HLS-сегменты и minute-watched beacon"
+		return result, nil
+	case playlistErr == nil:
+		result.Warning = "minute-watched beacon: " + safeHeartbeatError(beaconErr)
+		return result, nil
+	case beaconErr == nil:
+		result.Method = "minute-watched beacon"
+		result.Warning = "HLS недоступен после обновления плейлиста: " + safeHeartbeatError(playlistErr)
+		return result, nil
+	default:
+		return result, fmt.Errorf("оба сигнала не прошли (HLS: %s; beacon: %s)", safeHeartbeatError(playlistErr), safeHeartbeatError(beaconErr))
+	}
+}
+
+// WatchHLS checks the playlist and segment headers, refreshing an expired URL once.
+// It never sends a minute-watched event; the worker schedules that independently.
+func (c *GQLClient) WatchHLS(ctx context.Context, variantURL string, stream Stream) (HeartbeatResult, error) {
 	result := HeartbeatResult{VariantURL: variantURL}
 	playlistErr := c.watchPlaylistSegments(ctx, variantURL)
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	if playlistErr != nil {
 		freshVariant, refreshErr := c.refreshPlaylist(ctx, stream.Login)
 		if refreshErr != nil {
@@ -402,23 +470,22 @@ func (c *GQLClient) WatchHeartbeat(ctx context.Context, variantURL string, strea
 			}
 		}
 	}
-	beaconErr := c.sendMinuteWatched(ctx, stream)
-	switch {
-	case playlistErr == nil && beaconErr == nil:
-		result.Method = "HLS-сегменты и minute-watched beacon"
-		return result, nil
-	case playlistErr == nil:
-		result.Method = "HLS-сегменты"
-		result.Warning = "minute-watched beacon: " + safeHeartbeatError(beaconErr)
-		return result, nil
-	case beaconErr == nil:
-		result.Method = "minute-watched beacon"
-		result.Warning = "HLS недоступен после обновления плейлиста: " + safeHeartbeatError(playlistErr)
-		return result, nil
-	default:
-		return result, fmt.Errorf("оба сигнала не прошли (HLS: %s; beacon: %s)",
-			safeHeartbeatError(playlistErr), safeHeartbeatError(beaconErr))
+	if err := ctx.Err(); err != nil {
+		return result, err
 	}
+	if playlistErr != nil {
+		result.HLSFailed = true
+		return result, fmt.Errorf("HLS: %s", safeHeartbeatError(playlistErr))
+	}
+	result.Method = "HLS-сегменты"
+	return result, nil
+}
+
+func (c *GQLClient) SendMinuteWatched(ctx context.Context, stream Stream) error {
+	if err := c.sendMinuteWatched(ctx, stream); err != nil {
+		return fmt.Errorf("%s", safeHeartbeatError(err))
+	}
+	return nil
 }
 
 func (c *GQLClient) refreshPlaylist(ctx context.Context, channel string) (string, error) {
@@ -509,7 +576,6 @@ func (c *GQLClient) watchPlaylistSegments(ctx context.Context, playlistURL strin
 		}
 		req.Header.Set("Accept", "*/*")
 		req.Header.Set("User-Agent", androidUserAgent)
-		req.Close = true
 		resp, err := c.http.Do(req)
 		if err != nil {
 			return err
@@ -532,7 +598,6 @@ func (c *GQLClient) getHLSPlaylist(ctx context.Context, rawURL string, limit int
 	}
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("User-Agent", androidUserAgent)
-	req.Close = true
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, err

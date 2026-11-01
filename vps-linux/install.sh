@@ -34,8 +34,11 @@ fi
 if [[ ! -f "$app_dir/config.env" ]]; then
   install -o "$service_user" -g "$service_user" -m 0600 "$bundle_dir/config.env.example" "$app_dir/config.env"
 fi
-if [[ ! -e "$app_dir/accounts.txt" ]]; then
-  install -o "$service_user" -g "$service_user" -m 0600 /dev/null "$app_dir/accounts.txt"
+if [[ ! -e "$app_dir/account.txt" && -f "$app_dir/accounts.txt" ]]; then
+  mv -- "$app_dir/accounts.txt" "$app_dir/account.txt"
+fi
+if [[ ! -e "$app_dir/account.txt" ]]; then
+  install -o "$service_user" -g "$service_user" -m 0600 /dev/null "$app_dir/account.txt"
 fi
 install -d -o "$service_user" -g "$service_user" -m 0750 "$app_dir/logs"
 
@@ -112,8 +115,8 @@ else
   fi
 fi
 
-chown "$service_user:$service_user" "$app_dir/config.json" "$app_dir/config.env" "$app_dir/accounts.txt"
-chmod 0600 "$app_dir/config.json" "$app_dir/config.env" "$app_dir/accounts.txt"
+chown "$service_user:$service_user" "$app_dir/config.json" "$app_dir/config.env" "$app_dir/account.txt"
+chmod 0600 "$app_dir/config.json" "$app_dir/config.env" "$app_dir/account.txt"
 
 install -o root -g root -m 0644 "$bundle_dir/tdm-light.service" /etc/systemd/system/tdm-light.service
 systemctl daemon-reload
@@ -126,5 +129,5 @@ fi
 
 echo
 echo "tdm light установлен и запущен как systemd-служба."
-echo "Отправь Telegram-боту файл accounts.txt документом; он проверит его и перезагрузит майнер."
+echo "Отправь Telegram-боту файл account.txt документом; он проверит его и перезагрузит майнер."
 echo "Логи службы: journalctl -u tdm-light -f"

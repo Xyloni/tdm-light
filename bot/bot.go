@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -21,13 +22,18 @@ type telegramDocument struct {
 	FileSize int64  `json:"file_size"`
 }
 
+// PollState survives manager reloads. A process owns one state for its bot.
+type PollState struct {
+	offset atomic.Int64
+}
+
 // Bot — минимальный Telegram-бот на long polling.
 // Команды принимаются только от администратора (adminID).
 type Bot struct {
-	token   string
-	adminID int64
-	http    *http.Client
-	offset  int64
+	token     string
+	adminID   int64
+	http      *http.Client
+	pollState *PollState
 
 	statusFn func() string
 	logsFn   func(login string) string
@@ -37,17 +43,22 @@ type Bot struct {
 	uploadFn func([]byte) error
 }
 
-func New(token string, adminID int64, statusFn func() string, logsFn func(string) string, reloadFn func(), gameFn func() string, setGame func(string) error, uploadFn func([]byte) error) *Bot {
+func New(token string, adminID int64, statusFn func() string, logsFn func(string) string, reloadFn func(), gameFn func() string, setGame func(string) error, uploadFn func([]byte) error, states ...*PollState) *Bot {
+	state := new(PollState)
+	if len(states) > 0 && states[0] != nil {
+		state = states[0]
+	}
 	return &Bot{
-		token:    token,
-		adminID:  adminID,
-		http:     &http.Client{Timeout: 40 * time.Second},
-		statusFn: statusFn,
-		logsFn:   logsFn,
-		reloadFn: reloadFn,
-		gameFn:   gameFn,
-		setGame:  setGame,
-		uploadFn: uploadFn,
+		pollState: state,
+		token:     token,
+		adminID:   adminID,
+		http:      &http.Client{Timeout: 40 * time.Second},
+		statusFn:  statusFn,
+		logsFn:    logsFn,
+		reloadFn:  reloadFn,
+		gameFn:    gameFn,
+		setGame:   setGame,
+		uploadFn:  uploadFn,
 	}
 }
 
@@ -66,7 +77,7 @@ func (b *Bot) Run(ctx context.Context) {
 
 func (b *Bot) poll(ctx context.Context) error {
 	u := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates?offset=%d&timeout=25&allowed_updates=%%5B%%22message%%22%%5D",
-		b.token, b.offset)
+		b.token, b.pollState.offset.Load())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return err
@@ -97,7 +108,13 @@ func (b *Bot) poll(ctx context.Context) error {
 		return fmt.Errorf("telegram: ok=false")
 	}
 	for _, upd := range res.Result {
-		b.offset = upd.UpdateID + 1
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if upd.UpdateID < b.pollState.offset.Load() {
+			continue
+		}
+		b.pollState.offset.Store(upd.UpdateID + 1)
 		msg := upd.Message
 		if msg == nil || msg.From.ID != b.adminID {
 			continue
@@ -156,22 +173,22 @@ func (b *Bot) handle(ctx context.Context, text string, document *telegramDocumen
 			b.reloadFn()
 		}
 	case "/restart":
-		b.send("♻️ Перезагружаю config.json и accounts.txt...")
+		b.send("♻️ Перезагружаю config.json и account.txt...")
 		b.reloadFn()
 	default:
 		b.send(helpText)
 	}
 }
 
-const helpText = "Команды:\n/status — сводка фарма\n/logs <login> — последние логи аккаунта\n/game — показать текущую игру\n/game <название> — сменить игру и перезапустить майнинг\n/restart — перечитать конфиг и accounts.txt\n\nЧтобы загрузить аккаунты, отправьте accounts.txt документом. Файл будет проверен, сохранён и майнинг перезапустится."
+const helpText = "Команды:\n/status — сводка фарма\n/logs <login> — последние логи аккаунта\n/game — показать текущую игру\n/game <название> — сменить игру и перезапустить майнинг\n/restart — перечитать конфиг и account.txt\n\nЧтобы загрузить аккаунты, отправьте любой .txt документом. Файл будет проверен, сохранён как account.txt и майнинг перезапустится."
 
 func (b *Bot) handleAccountsDocument(ctx context.Context, fileID, fileName string, fileSize int64) {
-	if !strings.EqualFold(path.Base(fileName), "accounts.txt") || strings.ContainsAny(fileName, `/\\`) {
-		b.send("Пришли документ с именем accounts.txt.")
+	if !strings.EqualFold(path.Ext(fileName), ".txt") || strings.ContainsAny(fileName, `/\\`) {
+		b.send("Пришли документ с любым названием и расширением .txt.")
 		return
 	}
 	if b.uploadFn == nil {
-		b.send("Загрузка accounts.txt не настроена.")
+		b.send("Загрузка account.txt не настроена.")
 		return
 	}
 	if fileSize > maxAccountsUploadBytes {
@@ -187,7 +204,7 @@ func (b *Bot) handleAccountsDocument(ctx context.Context, fileID, fileName strin
 		b.send("Файл не сохранён: " + err.Error())
 		return
 	}
-	b.send("✅ accounts.txt проверен и сохранён. Перезапускаю фарм с новым списком аккаунтов.")
+	b.send("✅ account.txt проверен и сохранён. Перезапускаю фарм с новым списком аккаунтов.")
 	if b.reloadFn != nil {
 		b.reloadFn()
 	}

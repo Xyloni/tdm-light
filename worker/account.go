@@ -14,30 +14,49 @@ import (
 
 // accountWorker — горутина одного аккаунта внутри активной группы.
 type accountWorker struct {
-	m            *Manager
-	acc          *parser.Account
-	st           *AccountState
-	gql          *twitch.GQLClient
-	startupDelay time.Duration
+	m                *Manager
+	acc              *parser.Account
+	st               *AccountState
+	gql              *twitch.GQLClient
+	startupDelay     time.Duration
+	unavailable      map[string]time.Time
+	nextRateRecovery time.Time
 }
 
 func (w *accountWorker) Run(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	pubsubDone := make(chan struct{})
+	defer func() {
+		cancel()
+		<-pubsubDone
+	}()
+	defer func() {
+		if ctx.Err() != nil && !w.st.authFailed.Load() {
+			w.st.setStatus("stopped")
+		}
+	}()
 	rnd := rand.New(rand.NewSource(time.Now().UnixNano() + int64(w.acc.Line)*7919))
 
 	// Задержка рассчитана менеджером по числу аккаунтов активной группы.
 	if !sleepCtx(ctx, w.startupDelay) {
+		close(pubsubDone)
 		return
 	}
 
 	// Опциональный WebSocket-канал событий дропов (по умолчанию выключен).
 	if w.m.cfg.UsePubSub {
-		go w.gql.PubSubLoop(ctx, func(topic string, msg json.RawMessage) {
-			s := string(msg)
-			if len(s) > 200 {
-				s = s[:200] + "…"
-			}
-			w.st.addLog("pubsub: " + s)
-		})
+		go func() {
+			defer close(pubsubDone)
+			w.gql.PubSubLoop(ctx, func(topic string, msg json.RawMessage) {
+				s := string(msg)
+				if len(s) > 200 {
+					s = s[:200] + "…"
+				}
+				w.st.addLog("pubsub: " + s)
+			})
+		}()
+	} else {
+		close(pubsubDone)
 	}
 
 	errCount := 0
@@ -46,6 +65,7 @@ func (w *accountWorker) Run(ctx context.Context) {
 		if err != nil {
 			errCount++
 			if isAuthError(err) {
+				w.st.authFailed.Store(true)
 				w.st.setStatus("error: auth")
 				w.st.addLog("ошибка авторизации, воркер остановлен: " + err.Error())
 				return
@@ -85,7 +105,15 @@ func (w *accountWorker) nextDrop(ctx context.Context) (twitch.Drop, bool, error)
 		if d.CampaignStatus != "" && !strings.EqualFold(d.CampaignStatus, "ACTIVE") {
 			continue
 		}
-		if d.IsClaimed || d.Current >= d.Required {
+		if d.IsClaimed {
+			continue
+		}
+		if d.Required <= 0 {
+			continue
+		}
+		if d.ProgressKnown && d.Current >= d.Required {
+			w.st.setProgress(d)
+			w.markReady(d)
 			continue
 		}
 		return d, true, nil
@@ -93,126 +121,153 @@ func (w *accountWorker) nextDrop(ctx context.Context) (twitch.Drop, bool, error)
 	return twitch.Drop{}, false, nil
 }
 
-// farmDrop фармит один дроп: выбор стрима → heartbeat-ы → клейм на 100%.
+// farmDrop набирает время дропа. Получение награды остаётся пользователю.
 func (w *accountWorker) farmDrop(ctx context.Context, rnd *rand.Rand, drop twitch.Drop) error {
+	return w.farmDropScheduled(ctx, rnd, drop, watchIntervals{
+		hls:      20 * time.Second,
+		beacon:   time.Duration(maxInt(w.m.cfg.HeartbeatIntervalSec, 60)) * time.Second,
+		progress: time.Duration(maxInt(w.m.cfg.CampaignPollIntervalSec, 60)) * time.Second,
+	})
+}
+
+type watchIntervals struct{ hls, beacon, progress time.Duration }
+
+// Independent deadlines share the account goroutine; no extra loop per signal.
+func (w *accountWorker) farmDropScheduled(ctx context.Context, rnd *rand.Rand, drop twitch.Drop, intervals watchIntervals) error {
+	w.st.clearWatchRate()
+	defer w.st.clearWatchRate()
 	w.st.setStatus("farm: " + drop.CampaignName)
 	w.st.addLog("фарм дропа «" + drop.Name + "» начат")
-
+	w.reportProgress(drop)
 	variant := ""
-	var watchStream twitch.Stream
-	lastPoll := time.Now()
-	pendingClaim := 0
-	hbInterval := time.Duration(maxInt(w.m.cfg.HeartbeatIntervalSec, 20)) * time.Second
-	pollInterval := time.Duration(maxInt(w.m.cfg.CampaignPollIntervalSec, 60)) * time.Second
-	nextHeartbeat := time.Time{}
-
+	var stream twitch.Stream
+	nextHLS, nextBeacon := time.Time{}, time.Time{}
+	nextProgress := time.Now().Add(intervals.progress)
+	var rate watchRate
 	for ctx.Err() == nil {
-		// 1. Heartbeat — media playlist + HEAD-запросы к его сегментам и minute beacon.
-		if variant != "" {
-			heartbeatAt := time.Now()
-			result, err := w.gql.WatchHeartbeat(ctx, variant, watchStream)
-			if err != nil {
-				w.st.addLog("heartbeat оборвался (" + err.Error() + "), переподключение")
-				variant = ""
-				watchStream = twitch.Stream{}
-				nextHeartbeat = time.Time{}
-			} else {
-				if result.VariantURL != "" {
-					variant = result.VariantURL
-				}
-				if result.Warning != "" {
-					w.st.addLog("heartbeat предупреждение: " + result.Warning)
-				}
-				w.st.addLog("watch heartbeat отправлен: " + result.Method)
-				nextHeartbeat = heartbeatDeadline(nextHeartbeat, heartbeatAt, time.Now(), hbInterval)
-			}
-		}
-
-		// 2. Если «просмотровой» сессии нет — выбрать стрим и открыть её.
 		if variant == "" {
-			streams, err := w.gql.TopStreams(ctx, w.m.cfg.TargetGame, 15)
+			selected, playlist, err := w.openStream(ctx, rnd)
 			if err != nil {
 				return err
 			}
-			if len(streams) == 0 {
-				w.st.addLog("Twitch не вернул живые стримы с включёнными Drops для категории «" + w.m.cfg.TargetGame + "», повтор через паузу")
-				if !sleepCtx(ctx, jittered(rnd, 60*time.Second, w.m.cfg.JitterSec)) {
-					return nil
-				}
-				continue
-			}
-			s := streams[rnd.Intn(len(streams))] // случайный выбор — разносим аккаунты по каналам
-			token, sig, err := w.gql.PlaybackAccessToken(ctx, s.Login)
-			if err != nil {
-				return fmt.Errorf("playback token: %w", err)
-			}
-			master, err := w.gql.GetMasterPlaylist(ctx, twitch.MasterPlaylistURL(s.Login, token, sig))
-			if err != nil {
-				return fmt.Errorf("master playlist: %w", err)
-			}
-			variant, err = twitch.PickLowestVariant(master)
-			if err != nil {
-				return err
-			}
-			watchStream = s
-			w.st.addLog("просмотр канала: " + watchStream.Login)
-			continue // первый heartbeat — на следующей итерации
+			stream, variant = selected, playlist
+			rate.reset(time.Now(), drop.Current, drop.ProgressKnown)
+			w.st.clearWatchRate()
+			nextHLS = time.Time{}
+			w.st.addLog("просмотр канала: " + stream.Login)
 		}
-
-		// 3. Ждём до фиксированного минутного дедлайна. Время сетевого
-		// запроса не прибавляется к интервалу и не сдвигает все следующие циклы.
-		if !nextHeartbeat.IsZero() && !sleepUntil(ctx, nextHeartbeat) {
-			return nil
-		}
-
-		// 4. Периодический опрос прогресса и клейм.
-		if time.Since(lastPoll) < pollInterval {
-			continue
-		}
-		lastPoll = time.Now()
-		cur, ok, err := w.findDrop(ctx, drop.ID)
-		if err != nil {
-			w.st.addLog("прогресс: " + err.Error())
-			continue
-		}
-		if !ok {
-			w.st.addLog("дроп пропал из дашборда")
-			return nil
-		}
-		if cur.IsClaimed {
-			w.st.addLog("«" + cur.Name + "» уже получен")
-			return nil
-		}
-		if cur.Current != drop.Current {
-			w.st.addLog(fmt.Sprintf("прогресс «%s»: %d/%d мин", cur.Name, cur.Current, cur.Required))
-			drop = cur
-		}
-		if cur.Current >= cur.Required {
-			if cur.DropInstanceID != "" {
-				return w.claim(ctx, cur)
-			}
-			pendingClaim++
-			w.st.addLog("100% набрано, ожидаю dropInstanceID…")
-			if pendingClaim >= 15 {
-				w.st.addLog("dropInstanceID не выдан — пропускаю дроп")
+		if !time.Now().Before(nextHLS) {
+			started := time.Now()
+			result, err := w.gql.WatchHLS(ctx, variant, stream)
+			if ctx.Err() != nil {
 				return nil
 			}
+			nextHLS = signalDeadline(nextHLS, started, time.Now(), intervals.hls)
+			if err != nil {
+				w.st.addLog("канал " + stream.Login + ": HLS не восстановлен (" + err.Error() + "), переключаю канал")
+				w.excludeChannel(stream.Login)
+				variant = ""
+				continue
+			}
+			if result.VariantURL != "" {
+				variant = result.VariantURL
+			}
+			if result.Warning != "" {
+				w.st.addLog("HLS предупреждение: " + result.Warning)
+			}
+			w.st.addLog("HLS-проверка выполнена: плейлист и HEAD сегментов")
+		}
+		if !time.Now().Before(nextBeacon) {
+			started := time.Now()
+			err := w.gql.SendMinuteWatched(ctx, stream)
+			if ctx.Err() != nil {
+				return nil
+			}
+			nextBeacon = signalDeadline(nextBeacon, started, time.Now(), intervals.beacon)
+			if err != nil {
+				w.st.addLog("minute-watched beacon: " + err.Error())
+			} else {
+				w.st.addLog("minute-watched beacon отправлен")
+			}
+		}
+		if !time.Now().Before(nextProgress) {
+			started := time.Now()
+			cur, ok, err := w.findDrop(ctx, drop.ID)
+			if ctx.Err() != nil {
+				return nil
+			}
+			nextProgress = signalDeadline(nextProgress, started, time.Now(), intervals.progress)
+			if err != nil {
+				w.st.addLog("прогресс: " + err.Error())
+			} else {
+				if !ok {
+					w.st.addLog("дроп пропал из дашборда")
+					return nil
+				}
+				if cur.IsClaimed {
+					w.st.addLog("«" + cur.Name + "» уже получен")
+					return nil
+				}
+				w.reportProgress(cur)
+				drop = cur
+				if cur.ProgressKnown && cur.Current >= cur.Required {
+					w.markReady(cur)
+					return nil
+				}
+				now := time.Now()
+				slow, gain, elapsed := rate.observe(now, cur.Current, cur.ProgressKnown, 2*intervals.progress+time.Minute)
+				w.st.setWatchRate(&rate)
+				if slow && w.reserveRateRecovery(now, rnd) {
+					w.st.mu.Lock()
+					w.st.rateRecoveries++
+					w.st.mu.Unlock()
+					w.st.clearWatchRate()
+					// Retained across drops/retries; jitter avoids synchronized recovery.
+					w.st.addLog(fmt.Sprintf("медленное начисление на %s: +%d мин за %.1f мин; восстанавливаю просмотр", stream.Login, gain, elapsed.Minutes()))
+					selected, playlist, recoveryErr := w.recoverSlowStream(ctx, rnd, stream)
+					if ctx.Err() != nil {
+						return nil
+					}
+					if recoveryErr != nil {
+						w.st.addLog("восстановление скорости не удалось; продолжаю текущий просмотр")
+					} else {
+						stream, variant = selected, playlist
+						nextHLS = time.Time{}
+					}
+					// Observe a fresh full window after every attempt, including failure.
+					rate.reset(time.Now(), cur.Current, cur.ProgressKnown)
+				}
+			}
+		}
+		deadline := nextHLS
+		if nextBeacon.Before(deadline) {
+			deadline = nextBeacon
+		}
+		if nextProgress.Before(deadline) {
+			deadline = nextProgress
+		}
+		if !sleepUntil(ctx, deadline) {
+			return nil
 		}
 	}
 	return nil
 }
 
-// claim — автоматический GQL-клейм готового дропа.
-func (w *accountWorker) claim(ctx context.Context, drop twitch.Drop) error {
-	if err := w.gql.ClaimDrop(ctx, drop.DropInstanceID); err != nil {
-		return fmt.Errorf("claim: %w", err)
-	}
+// markReady counts and announces each completed drop once per manager lifetime.
+func (w *accountWorker) markReady(drop twitch.Drop) {
 	w.st.mu.Lock()
-	w.st.DropsClaimed++
+	if w.st.readyDrops == nil {
+		w.st.readyDrops = make(map[string]struct{})
+	}
+	if _, exists := w.st.readyDrops[drop.ID]; exists {
+		w.st.mu.Unlock()
+		return
+	}
+	w.st.readyDrops[drop.ID] = struct{}{}
+	w.st.DropsReady++
 	w.st.mu.Unlock()
-	w.st.addLog("✅ ДРОП ПОЛУЧЕН: " + drop.Name)
-	w.m.notifyClaim(w.acc, drop)
-	return nil
+	w.st.addLog("✅ ВРЕМЯ НАБРАНО: " + drop.Name + "; получение вручную")
+	w.m.notifyReady(w.acc, drop)
 }
 
 func (w *accountWorker) findDrop(ctx context.Context, dropID string) (twitch.Drop, bool, error) {

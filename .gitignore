@@ -1,10 +1,12 @@
 # Local credentials and account data
 /accounts.txt
+/account.txt
 /config.env
 /config.json
 /.env
 /data/
 /accounts.txt.*.bak
+/account.txt.*.bak
 
 # Runtime data and build products
 /logs/

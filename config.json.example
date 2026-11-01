@@ -3,7 +3,7 @@
   "client_id": "kd1unb4b3q4t58fwlpcbzcbnm76a8fp",
   "telegram_bot_token": "",
   "telegram_admin_id": 0,
-  "accounts_file": "accounts.txt",
+  "accounts_file": "account.txt",
   "heartbeat_interval_sec": 60,
   "campaign_poll_interval_sec": 120,
   "jitter_sec": 20,

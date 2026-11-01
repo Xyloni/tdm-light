@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/sha1"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
@@ -11,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +36,10 @@ func wsDial(ctx context.Context, host, path string) (*wsConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Cancellation and a deadline also cover the HTTP upgrade, not just TLS dial.
+	stopClose := context.AfterFunc(ctx, func() { raw.Close() })
+	defer stopClose()
+	_ = raw.SetDeadline(time.Now().Add(15 * time.Second))
 	keyBytes := make([]byte, 16)
 	_, _ = rand.Read(keyBytes)
 	key := base64.StdEncoding.EncodeToString(keyBytes)
@@ -44,25 +50,19 @@ func wsDial(ctx context.Context, host, path string) (*wsConn, error) {
 		return nil, err
 	}
 	br := bufio.NewReader(raw)
-	status, err := br.ReadString('\n')
+	resp, err := http.ReadResponse(br, &http.Request{Method: http.MethodGet})
 	if err != nil {
 		raw.Close()
 		return nil, err
 	}
-	if !strings.Contains(status, "101") {
+	accept := sha1.Sum([]byte(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+	if resp.StatusCode != http.StatusSwitchingProtocols ||
+		!strings.EqualFold(resp.Header.Get("Upgrade"), "websocket") ||
+		resp.Header.Get("Sec-WebSocket-Accept") != base64.StdEncoding.EncodeToString(accept[:]) {
 		raw.Close()
-		return nil, fmt.Errorf("WS handshake: %s", strings.TrimSpace(status))
+		return nil, fmt.Errorf("WS handshake: invalid upgrade (HTTP %d)", resp.StatusCode)
 	}
-	for { // дочитываем заголовки до пустой строки
-		line, err := br.ReadString('\n')
-		if err != nil {
-			raw.Close()
-			return nil, err
-		}
-		if line == "\r\n" {
-			break
-		}
-	}
+	_ = raw.SetDeadline(time.Time{})
 	return &wsConn{conn: raw, br: br}, nil
 }
 
@@ -108,7 +108,9 @@ func (c *wsConn) WriteText(payload []byte) error { return c.writeFrame(0x1, payl
 // readMessage читает одно (возможно, фрагментированное) сообщение,
 // автоматически отвечая pong на ping.
 func (c *wsConn) readMessage() ([]byte, error) {
+	const maxMessageBytes = 1 << 20
 	var msg []byte
+	started := false
 	for {
 		h := make([]byte, 2)
 		if _, err := io.ReadFull(c.br, h); err != nil {
@@ -117,44 +119,53 @@ func (c *wsConn) readMessage() ([]byte, error) {
 		fin := h[0]&0x80 != 0
 		opcode := h[0] & 0x0F
 		masked := h[1]&0x80 != 0
-		n := int64(h[1] & 0x7F)
+		if h[0]&0x70 != 0 || masked {
+			return nil, fmt.Errorf("invalid server WS frame flags")
+		}
+		n := uint64(h[1] & 0x7F)
 		switch n {
 		case 126:
 			var b [2]byte
 			if _, err := io.ReadFull(c.br, b[:]); err != nil {
 				return nil, err
 			}
-			n = int64(binary.BigEndian.Uint16(b[:]))
+			n = uint64(binary.BigEndian.Uint16(b[:]))
 		case 127:
 			var b [8]byte
 			if _, err := io.ReadFull(c.br, b[:]); err != nil {
 				return nil, err
 			}
-			n = int64(binary.BigEndian.Uint64(b[:]))
+			n = binary.BigEndian.Uint64(b[:])
 		}
-		if n > 1<<20 {
+		if n > maxMessageBytes {
 			return nil, fmt.Errorf("слишком большой WS-фрейм: %d байт", n)
 		}
-		var mask [4]byte
-		if masked {
-			if _, err := io.ReadFull(c.br, mask[:]); err != nil {
-				return nil, err
+		if opcode >= 8 && (!fin || n > 125) {
+			return nil, fmt.Errorf("invalid WS control frame")
+		}
+		if opcode < 8 {
+			if opcode == 1 && !started {
+				started = true
+			} else if opcode != 0 || !started {
+				return nil, fmt.Errorf("invalid WS message fragmentation")
 			}
+			if n > uint64(maxMessageBytes-len(msg)) {
+				return nil, fmt.Errorf("WS message exceeds %d bytes", maxMessageBytes)
+			}
+		} else if opcode != 8 && opcode != 9 && opcode != 10 {
+			return nil, fmt.Errorf("unsupported WS opcode")
 		}
 		payload := make([]byte, n)
 		if _, err := io.ReadFull(c.br, payload); err != nil {
 			return nil, err
 		}
-		if masked {
-			for i := range payload {
-				payload[i] ^= mask[i%4]
-			}
-		}
 		switch opcode {
 		case 0x8:
 			return nil, fmt.Errorf("WS закрыт сервером")
 		case 0x9: // ping → pong
-			_ = c.writeFrame(0xA, payload)
+			if err := c.writeFrame(0xA, payload); err != nil {
+				return nil, err
+			}
 			continue
 		case 0xA: // pong
 			continue
@@ -181,6 +192,9 @@ func (c *GQLClient) PubSubLoop(ctx context.Context, onEvent func(topic string, m
 		}
 		if backoff < 5*time.Minute {
 			backoff *= 2
+			if backoff > 5*time.Minute {
+				backoff = 5 * time.Minute
+			}
 		}
 	}
 }
@@ -205,7 +219,13 @@ func (c *GQLClient) pubsubOnce(ctx context.Context, onEvent func(topic string, m
 	}
 
 	errCh := make(chan error, 1)
+	readDone := make(chan struct{})
+	defer func() {
+		ws.conn.Close()
+		<-readDone
+	}()
 	go func() {
+		defer close(readDone)
 		for {
 			_ = ws.conn.SetReadDeadline(time.Now().Add(6 * time.Minute))
 			m, err := ws.readMessage()
