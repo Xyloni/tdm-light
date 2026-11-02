@@ -48,7 +48,11 @@ func (s *AccountState) setStatus(v string) {
 }
 
 func (s *AccountState) addLog(line string) {
-	stamped := time.Now().Format("15:04:05") + " " + line
+	s.addLogAt(time.Now(), line)
+}
+
+func (s *AccountState) addLogAt(at time.Time, line string) {
+	stamped := at.Format("15:04:05") + " " + line
 	s.mu.Lock()
 	if len(s.logs) < maxLogLines {
 		s.logs = append(s.logs, stamped)
@@ -59,7 +63,7 @@ func (s *AccountState) addLog(line string) {
 	s.mu.Unlock()
 	log.Printf("[%s] %s", s.Account.Login, line)
 	if s.LogFile != "" {
-		if err := s.appendFileLog(time.Now().Format("2006-01-02 ") + stamped + "\n"); err != nil {
+		if err := s.appendFileLog(at.Format("2006-01-02 ") + stamped + "\n"); err != nil {
 			log.Printf("[%s] запись лога: %v", s.Account.Login, err)
 		}
 	}

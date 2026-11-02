@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xyloni/tdm-light/parser"
@@ -130,42 +131,157 @@ func (w *accountWorker) farmDrop(ctx context.Context, rnd *rand.Rand, drop twitc
 	})
 }
 
-type watchIntervals struct{ hls, beacon, progress time.Duration }
+type watchIntervals struct {
+	hls, beacon, progress time.Duration
+	timeouts              operationTimeouts
+}
 
-// Independent deadlines share the account goroutine; no extra loop per signal.
-func (w *accountWorker) farmDropScheduled(ctx context.Context, rnd *rand.Rand, drop twitch.Drop, intervals watchIntervals) error {
+// HLS/recovery stays owned by this worker; beacon and Inventory each have one
+// sequential background loop. No request goroutines or pending jobs accumulate.
+func (w *accountWorker) farmDropScheduled(parent context.Context, rnd *rand.Rand, drop twitch.Drop, intervals watchIntervals) error {
+	ctx, cancel := context.WithCancel(parent)
+	budgets := intervals.timeouts.defaults()
 	w.st.clearWatchRate()
 	defer w.st.clearWatchRate()
 	w.st.setStatus("farm: " + drop.CampaignName)
 	w.st.addLog("фарм дропа «" + drop.Name + "» начат")
 	w.reportProgress(drop)
+
+	streams := newWatchStream(ctx)
+	progress := make(chan inventoryResult, 1)
+	var background sync.WaitGroup
+	background.Add(2)
+	go func() { defer background.Done(); w.beaconLoop(ctx, streams, intervals.beacon, budgets.beacon) }()
+	go func() {
+		defer background.Done()
+		w.inventoryLoop(ctx, drop.ID, intervals.progress, budgets.inventory, progress)
+	}()
+	defer func() { cancel(); streams.clear(); background.Wait() }()
+
 	variant := ""
 	var stream twitch.Stream
-	nextHLS, nextBeacon := time.Time{}, time.Time{}
-	nextProgress := time.Now().Add(intervals.progress)
+	nextHLS := time.Time{}
+	nextOpen := time.Time{}
 	var rate watchRate
-	for ctx.Err() == nil {
-		if variant == "" {
-			selected, playlist, err := w.openStream(ctx, rnd)
+	var rateStarted time.Time
+	handleProgress := func(result inventoryResult) bool {
+		if result.err != nil {
+			w.st.addLog("прогресс: " + result.err.Error())
+			return false
+		}
+		cur := result.drop
+		if !result.found {
+			w.st.addLog("дроп пропал из дашборда")
+			return true
+		}
+		if cur.IsClaimed {
+			w.st.addLog("«" + cur.Name + "» уже получен")
+			return true
+		}
+		w.reportProgress(cur)
+		drop = cur
+		if cur.ProgressKnown && cur.Current >= cur.Required {
+			w.markReady(cur)
+			return true
+		}
+		// A poll that began before the current playback observation window
+		// cannot measure that window. Still retain its confirmed progress above.
+		if variant == "" || result.started.Before(rateStarted) {
+			return false
+		}
+		slow, gain, elapsed := rate.observe(result.checked, cur.Current, cur.ProgressKnown, 2*intervals.progress+time.Minute)
+		w.st.setWatchRate(&rate)
+		if slow && w.reserveRateRecovery(result.checked, rnd) {
+			w.st.mu.Lock()
+			w.st.rateRecoveries++
+			w.st.mu.Unlock()
+			w.st.clearWatchRate()
+			w.st.addLog(fmt.Sprintf("медленное начисление на %s: +%d мин за %.1f мин; восстанавливаю просмотр", stream.Login, gain, elapsed.Minutes()))
+			recoveryCtx, stop := context.WithTimeout(ctx, budgets.recovery)
+			selected, playlist, err := w.recoverSlowStream(recoveryCtx, rnd, stream)
+			stop()
+			if ctx.Err() != nil {
+				return true
+			}
 			if err != nil {
-				return err
+				w.st.addLog("восстановление скорости не удалось; продолжаю текущий просмотр")
+			} else {
+				stream, variant = selected, playlist
+				streams.set(stream)
+				nextHLS = time.Time{}
+			}
+			rateStarted = time.Now()
+			rate.reset(rateStarted, cur.Current, cur.ProgressKnown)
+		}
+		return false
+	}
+	waitForWork := func(deadline time.Time) bool {
+		timer := time.NewTimer(time.Until(deadline))
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return true
+		case result := <-progress:
+			return handleProgress(result)
+		case <-timer.C:
+			return false
+		}
+	}
+	for ctx.Err() == nil {
+		// Consume the latest completed poll before doing more network work.
+		select {
+		case result := <-progress:
+			if handleProgress(result) {
+				return nil
+			}
+		default:
+		}
+		if ctx.Err() != nil {
+			return nil
+		}
+		if variant == "" {
+			if time.Now().Before(nextOpen) {
+				if waitForWork(nextOpen) {
+					return nil
+				}
+				continue
+			}
+			recoveryCtx, stop := context.WithTimeout(ctx, budgets.recovery)
+			selected, playlist, err := w.openStream(recoveryCtx, rnd)
+			stop()
+			if ctx.Err() != nil {
+				return nil
+			}
+			if err != nil {
+				if isAuthError(err) {
+					return err
+				}
+				w.st.addLog("поиск канала: " + err.Error())
+				nextOpen = time.Now().Add(jittered(rnd, 30*time.Second, w.m.cfg.JitterSec))
+				continue // Inventory continues during the bounded playback retry pause.
 			}
 			stream, variant = selected, playlist
-			rate.reset(time.Now(), drop.Current, drop.ProgressKnown)
+			rateStarted = time.Now()
+			rate.reset(rateStarted, drop.Current, drop.ProgressKnown)
 			w.st.clearWatchRate()
+			streams.set(stream)
 			nextHLS = time.Time{}
 			w.st.addLog("просмотр канала: " + stream.Login)
 		}
 		if !time.Now().Before(nextHLS) {
 			started := time.Now()
-			result, err := w.gql.WatchHLS(ctx, variant, stream)
+			checkCtx, stop := context.WithTimeout(ctx, budgets.hls)
+			result, err := w.gql.WatchHLS(checkCtx, variant, stream)
+			stop()
 			if ctx.Err() != nil {
 				return nil
 			}
 			nextHLS = signalDeadline(nextHLS, started, time.Now(), intervals.hls)
 			if err != nil {
-				w.st.addLog("канал " + stream.Login + ": HLS не восстановлен (" + err.Error() + "), переключаю канал")
+				w.st.addLog(fmt.Sprintf("канал %s: HLS не восстановлен (%v; %.1f с), переключаю канал", stream.Login, err, time.Since(started).Seconds()))
 				w.excludeChannel(stream.Login)
+				streams.clear()
+				w.st.clearWatchRate()
 				variant = ""
 				continue
 			}
@@ -175,78 +291,9 @@ func (w *accountWorker) farmDropScheduled(ctx context.Context, rnd *rand.Rand, d
 			if result.Warning != "" {
 				w.st.addLog("HLS предупреждение: " + result.Warning)
 			}
-			w.st.addLog("HLS-проверка выполнена: плейлист и HEAD сегментов")
+			w.st.addLog(fmt.Sprintf("HLS-проверка выполнена: плейлист и HEAD сегментов (%.1f с)", time.Since(started).Seconds()))
 		}
-		if !time.Now().Before(nextBeacon) {
-			started := time.Now()
-			err := w.gql.SendMinuteWatched(ctx, stream)
-			if ctx.Err() != nil {
-				return nil
-			}
-			nextBeacon = signalDeadline(nextBeacon, started, time.Now(), intervals.beacon)
-			if err != nil {
-				w.st.addLog("minute-watched beacon: " + err.Error())
-			} else {
-				w.st.addLog("minute-watched beacon отправлен")
-			}
-		}
-		if !time.Now().Before(nextProgress) {
-			started := time.Now()
-			cur, ok, err := w.findDrop(ctx, drop.ID)
-			if ctx.Err() != nil {
-				return nil
-			}
-			nextProgress = signalDeadline(nextProgress, started, time.Now(), intervals.progress)
-			if err != nil {
-				w.st.addLog("прогресс: " + err.Error())
-			} else {
-				if !ok {
-					w.st.addLog("дроп пропал из дашборда")
-					return nil
-				}
-				if cur.IsClaimed {
-					w.st.addLog("«" + cur.Name + "» уже получен")
-					return nil
-				}
-				w.reportProgress(cur)
-				drop = cur
-				if cur.ProgressKnown && cur.Current >= cur.Required {
-					w.markReady(cur)
-					return nil
-				}
-				now := time.Now()
-				slow, gain, elapsed := rate.observe(now, cur.Current, cur.ProgressKnown, 2*intervals.progress+time.Minute)
-				w.st.setWatchRate(&rate)
-				if slow && w.reserveRateRecovery(now, rnd) {
-					w.st.mu.Lock()
-					w.st.rateRecoveries++
-					w.st.mu.Unlock()
-					w.st.clearWatchRate()
-					// Retained across drops/retries; jitter avoids synchronized recovery.
-					w.st.addLog(fmt.Sprintf("медленное начисление на %s: +%d мин за %.1f мин; восстанавливаю просмотр", stream.Login, gain, elapsed.Minutes()))
-					selected, playlist, recoveryErr := w.recoverSlowStream(ctx, rnd, stream)
-					if ctx.Err() != nil {
-						return nil
-					}
-					if recoveryErr != nil {
-						w.st.addLog("восстановление скорости не удалось; продолжаю текущий просмотр")
-					} else {
-						stream, variant = selected, playlist
-						nextHLS = time.Time{}
-					}
-					// Observe a fresh full window after every attempt, including failure.
-					rate.reset(time.Now(), cur.Current, cur.ProgressKnown)
-				}
-			}
-		}
-		deadline := nextHLS
-		if nextBeacon.Before(deadline) {
-			deadline = nextBeacon
-		}
-		if nextProgress.Before(deadline) {
-			deadline = nextProgress
-		}
-		if !sleepUntil(ctx, deadline) {
+		if waitForWork(nextHLS) {
 			return nil
 		}
 	}

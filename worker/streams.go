@@ -30,6 +30,8 @@ func (w *accountWorker) openStream(ctx context.Context, rnd *rand.Rand) (twitch.
 }
 
 func (w *accountWorker) openChannel(ctx context.Context, s twitch.Stream) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, channelOpenBudget)
+	defer cancel()
 	token, sig, err := w.gql.PlaybackAccessToken(ctx, s.Login)
 	if err != nil {
 		return "", err
@@ -42,6 +44,8 @@ func (w *accountWorker) openChannel(ctx context.Context, s twitch.Stream) (strin
 }
 
 func (w *accountWorker) recoverSlowStream(ctx context.Context, rnd *rand.Rand, current twitch.Stream) (twitch.Stream, string, error) {
+	ctx, cancel := context.WithTimeout(ctx, streamRecoveryBudget)
+	defer cancel()
 	w.excludeChannel(current.Login)
 	selected, playlist, err := w.openStreamExcept(ctx, rnd, current.Login)
 	if err == nil {
@@ -61,6 +65,8 @@ func (w *accountWorker) recoverSlowStream(ctx context.Context, rnd *rand.Rand, c
 }
 
 func (w *accountWorker) openStreamExcept(ctx context.Context, rnd *rand.Rand, excluded string) (twitch.Stream, string, error) {
+	ctx, cancel := context.WithTimeout(ctx, streamRecoveryBudget)
+	defer cancel()
 	streams, err := w.gql.TopStreams(ctx, w.m.cfg.TargetGame, 15)
 	if err != nil {
 		return twitch.Stream{}, "", err

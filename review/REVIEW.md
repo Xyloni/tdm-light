@@ -164,3 +164,15 @@ Added regression checks for DM-only registration/authorization, concurrent resol
 Slash-command uploads now accept Discord's `/ephemeral-attachments/` CDN path as well as `/attachments/`, including signed query strings and Unicode filenames. Host allowlisting, redirect rejection, omitted CDN authorization, size limits, and account-file validation remain enforced. Added regression coverage through the `/accounts` command.
 
 The latest short live run had a correlated Twitch connection failure and subsequent HLS recovery across affected accounts. This release does not claim the network failure is fixed or that prolonged farming stability has been proven. Mock load tests and build checks do not establish live Twitch crediting rates.
+
+
+## Independent watch operations (2026-11-03, after v0.1.1)
+
+A live log review showed 101 seconds between successful HLS checks while sequential request timeouts and channel replacement accumulated. HLS/recovery remains owned by the account worker. A sequential beacon loop and a sequential Inventory loop now run independently, with at most one in-flight operation of each type and a single latest-result slot. Parent cancellation cancels requests and joins both loops before returning/reload. A stream-generation context cancels an old beacon during channel replacement; beacon cadence survives replacement. Inventory continues during playback retry pauses. Completed/disappeared/claimed drop results terminate polling and remain available to the owner.
+
+Timeout budgets: 15 seconds for a complete HLS check with refresh/retry, 20 seconds for complete channel selection/recovery, 8 seconds per channel candidate, and 15 seconds each for beacon and Inventory. Failed channels still cool down for five minutes; slow-rate recovery still preserves a working stream if replacement fails. Rate samples from polls begun before playback reset do not measure the new window. HLS logs include elapsed time. Date and time in account logs now come from one captured instant, fixing three observed midnight timestamp inconsistencies.
+
+Regression tests exercise 250/500 accounts with separately stalled HLS, beacon and Inventory, assert continued independent operations and one request of each type per account, and verify all requests are gone after cancellation. Further checks cover switching away from a hanging HLS channel, drop completion while stream opening stalls, cancellation of an old stream's beacon without a replacement burst, midnight timestamps, and the existing cadence/recovery suite. The scenarios use a mocked transport; they do not establish live Twitch crediting or eliminate server/network outages.
+
+
+Validation for this change: full Go suite (three repetitions), additional isolation/cancellation/cadence scenarios (ten repetitions, followed by five repetitions after expanding completion tests), and go vet passed. A compiler for cgo is not installed, so the race detector was unavailable; concurrent mocked tests are not a substitute for it. Live Twitch performance after this change remains to be measured. No release is being published with this commit.
