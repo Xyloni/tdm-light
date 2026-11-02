@@ -42,78 +42,8 @@ if [[ ! -e "$app_dir/account.txt" ]]; then
 fi
 install -d -o "$service_user" -g "$service_user" -m 0750 "$app_dir/logs"
 
-config_file="$app_dir/config.env"
-get_setting() {
-  local key="$1" line
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    if [[ "$line" == "$key="* ]]; then
-      local value="${line#*=}"
-      printf '%s' "${value%$'\r'}"
-      return 0
-    fi
-  done < "$config_file"
-  return 0
-}
-
-set_setting() {
-  local key="$1" value="$2" tmp="$config_file.tmp" line replaced=0
-  umask 077
-  : > "$tmp"
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    if [[ "$line" == "$key="* ]]; then
-      printf '%s=%s\n' "$key" "$value" >> "$tmp"
-      replaced=1
-    else
-      printf '%s\n' "$line" >> "$tmp"
-    fi
-  done < "$config_file"
-  if (( replaced == 0 )); then
-    printf '%s=%s\n' "$key" "$value" >> "$tmp"
-  fi
-  install -o "$service_user" -g "$service_user" -m 0600 "$tmp" "$config_file"
-  rm -f -- "$tmp"
-}
-
-token="$(get_setting TELEGRAM_BOT_TOKEN)"
-if [[ ! "$token" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ || "$token" == 1234567890:AA* ]]; then
-  echo "Для первого запуска настрой Telegram-бота. Токен вводится скрыто."
-  read -r -s -p "Токен Telegram-бота: " token
-  printf '\n'
-  if [[ ! "$token" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]]; then
-    echo "Некорректный формат токена Telegram." >&2
-    exit 1
-  fi
-  set_setting TELEGRAM_BOT_TOKEN "$token"
-else
-  echo "Существующий токен Telegram оставлен."
-fi
-unset token
-
-admin_id="$(get_setting TELEGRAM_ADMIN_ID)"
-if [[ ! "$admin_id" =~ ^[0-9]+$ || "$admin_id" == 123456789 ]]; then
-  read -r -p "Ваш числовой Telegram ID: " admin_id
-  if [[ ! "$admin_id" =~ ^[0-9]+$ ]]; then
-    echo "Telegram ID должен содержать только цифры." >&2
-    exit 1
-  fi
-  set_setting TELEGRAM_ADMIN_ID "$admin_id"
-else
-  echo "Существующий Telegram ID оставлен."
-fi
-
-game="$(get_setting TARGET_GAME)"
-if [[ -z "$game" ]]; then
-  read -r -p "Целевая игра (например, Hunt: Showdown 1896): " game
-  if [[ -z "$game" ]]; then echo "Название игры обязательно." >&2; exit 1; fi
-  set_setting TARGET_GAME "$game"
-else
-  read -r -p "Текущая игра: $game. Оставить её? [Y/n]: " answer
-  if [[ "$answer" =~ ^([nN]|no|нет|н)$ ]]; then
-    read -r -p "Введите новую целевую игру: " game
-    if [[ -z "$game" ]]; then echo "Название игры обязательно." >&2; exit 1; fi
-    set_setting TARGET_GAME "$game"
-  fi
-fi
+# The same first-launch wizard is used by the standalone Windows/Linux binary.
+(cd "$app_dir" && ./tdm-light --setup)
 
 chown "$service_user:$service_user" "$app_dir/config.json" "$app_dir/config.env" "$app_dir/account.txt"
 chmod 0600 "$app_dir/config.json" "$app_dir/config.env" "$app_dir/account.txt"
@@ -129,5 +59,5 @@ fi
 
 echo
 echo "tdm light установлен и запущен как systemd-служба."
-echo "Отправь Telegram-боту файл account.txt документом; он проверит его и перезагрузит майнер."
+echo "Загрузи любой .txt через выбранного бота (Discord: /accounts file); он сохранит account.txt и перезагрузит майнер."
 echo "Логи службы: journalctl -u tdm-light -f"

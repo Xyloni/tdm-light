@@ -62,23 +62,41 @@ set_setting() {
   mv -f -- "$tmp" "$file"
 }
 
-token="$(get_setting "$env_file" TELEGRAM_BOT_TOKEN)"
-if [[ ! "$token" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ || "$token" == 1234567890:AA* ]]; then
-  read -r -s -p "Токен Telegram-бота (ввод скрыт): " token </dev/tty
-  printf '\n'
-  if [[ ! "$token" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]]; then
-    echo "Некорректный формат токена." >&2
-    exit 1
+platform="$(get_setting "$env_file" BOT_PLATFORM)"
+if [[ -z "$platform" ]]; then
+  if [[ -n "$(get_setting "$env_file" TELEGRAM_BOT_TOKEN)" && -n "$(get_setting "$env_file" TELEGRAM_ADMIN_ID)" ]]; then
+    platform=telegram
+  else
+    read -r -p "Выберите бота: 1 — Telegram, 2 — Discord: " choice </dev/tty
+    case "$choice" in
+      1|telegram) platform=telegram ;;
+      2|discord) platform=discord ;;
+      *) echo "Выберите 1 или 2." >&2; exit 1 ;;
+    esac
   fi
-  set_setting "$env_file" TELEGRAM_BOT_TOKEN "$token"
+  set_setting "$env_file" BOT_PLATFORM "$platform"
 fi
-unset token
-
-admin_id="$(get_setting "$env_file" TELEGRAM_ADMIN_ID)"
-if [[ ! "$admin_id" =~ ^[0-9]+$ || "$admin_id" == 123456789 ]]; then
-  read -r -p "Ваш числовой Telegram ID: " admin_id </dev/tty
-  if [[ ! "$admin_id" =~ ^[0-9]+$ ]]; then echo "Telegram ID должен содержать только цифры." >&2; exit 1; fi
-  set_setting "$env_file" TELEGRAM_ADMIN_ID "$admin_id"
+case "$platform" in
+  telegram) token_key=TELEGRAM_BOT_TOKEN; admin_key=TELEGRAM_ADMIN_ID ;;
+  discord) token_key=DISCORD_BOT_TOKEN; admin_key=DISCORD_ADMIN_ID ;;
+  none) token_key=; admin_key= ;;
+  *) echo "BOT_PLATFORM: telegram, discord или none." >&2; exit 1 ;;
+esac
+if [[ -n "$token_key" ]]; then
+  token="$(get_setting "$env_file" "$token_key")"
+  if [[ -z "$token" ]]; then
+    read -r -s -p "Токен бота $platform (ввод скрыт): " token </dev/tty
+    printf '\n'
+    if [[ -z "$token" ]]; then echo "Токен обязателен." >&2; exit 1; fi
+    set_setting "$env_file" "$token_key" "$token"
+  fi
+  unset token
+  admin_id="$(get_setting "$env_file" "$admin_key")"
+  if [[ -z "$admin_id" ]]; then
+    read -r -p "Ваш user ID ($platform): " admin_id </dev/tty
+    if [[ ! "$admin_id" =~ ^[0-9]+$ || "$admin_id" == 0 ]]; then echo "Нужен числовой user ID." >&2; exit 1; fi
+    set_setting "$env_file" "$admin_key" "$admin_id"
+  fi
 fi
 
 game="$(get_setting "$game_file" TARGET_GAME)"
@@ -104,5 +122,5 @@ docker compose up -d --build
 docker compose ps
 
 echo
-echo "Готово. Отправь account.txt Telegram-боту документом."
+echo "Готово. Загрузи .txt через выбранного бота (Discord: /accounts file)."
 echo "Логи контейнера: docker compose logs -f tdm-light"

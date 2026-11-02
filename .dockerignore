@@ -15,3 +15,8 @@ tdm-light-vps-ubuntu.tar.gz
 vps-linux/tdm-light-linux-*
 *.log
 *.tmp
+
+# Local deployment secrets and account backups
+.env
+account.txt.*.bak
+accounts.txt.*.bak

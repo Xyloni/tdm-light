@@ -10,7 +10,7 @@ try {
     $env:GOCACHE = Join-Path $projectRoot '.gocache'
     $env:GOMODCACHE = Join-Path $projectRoot '.gocache/mod'
     if ($StabilityOnly) {
-        & go test ./... -run 'TestReview(Upload|Cancel|Concurrent|500)' -count 10 -timeout 120s
+        & go test ./... -run 'TestReview(Upload|Cancel|Concurrent|500)|Test500AccountsNeverWaitForStalledBot|TestDiscord|TestGateway' -count 10 -timeout 120s
     } else {
         & go test ./... -run TestReview -timeout 60s
     }

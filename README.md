@@ -2,11 +2,11 @@
 
 # 🎮 TwitchDrops Miner Light
 
-### A lightweight, multi-account Twitch Drops watcher with Telegram control
+### A lightweight, multi-account Twitch Drops watcher with Telegram or Discord control
 
 [English](#english) · [Русский](#русский)
 
-🟣 Twitch Drops &nbsp;·&nbsp; 🤖 Telegram bot &nbsp;·&nbsp; 🐳 Docker &nbsp;·&nbsp; 🪟 Windows &nbsp;·&nbsp; 🐧 Ubuntu VPS
+🟣 Twitch Drops &nbsp;·&nbsp; 🤖 Telegram / Discord &nbsp;·&nbsp; 🐳 Docker &nbsp;·&nbsp; 🪟 Windows &nbsp;·&nbsp; 🐧 Ubuntu VPS
 
 </div>
 
@@ -21,8 +21,8 @@ TwitchDrops Miner Light is a Go application that watches live channels for a sel
 - 🎯 Looks for live channels with Drops enabled for the selected game.
 - 👥 Runs multiple accounts with staggered startup.
 - ⏱ Tracks confirmed Inventory minutes; rewards are claimed manually.
-- 📈 Shows watch-time crediting speed in Telegram and recovers persistently slow viewing.
-- 🤖 Telegram controls for status, logs, game selection, restart, reward notifications, and account file uploads.
+- 📈 Shows watch-time crediting speed in Telegram or Discord and recovers persistently slow viewing.
+- 🤖 Telegram or Discord controls (choose on first launch) for status, logs, game selection, restart, reward notifications, and account file uploads.
 - 💾 Keeps account data, logs, and game settings in persistent local storage.
 - 🐳 Builds and runs with Docker Compose on a VPS.
 
@@ -34,7 +34,7 @@ On Ubuntu with Docker Engine, the Docker Compose plugin, and `sudo` access, run:
 curl -fsSL https://raw.githubusercontent.com/Xyloni/tdm-light/main/deploy/bootstrap-docker.sh | sudo bash
 ```
 
-The bootstrap script downloads the project to `/opt/tdm-light`, asks for your Telegram bot token, Telegram administrator ID, and target game, then builds and starts the container. Docker must already be installed; the script stops with an install hint if Docker or Compose is missing. After startup, upload any `.txt` document to the bot; it is saved as `account.txt` after validation (maximum 2 MiB).
+The bootstrap script downloads the project to `/opt/tdm-light`, offers Telegram or Discord, asks for the chosen bot token, administrator user ID, and target game, then builds and starts the container. Docker must already be installed; the script stops with an install hint if Docker or Compose is missing. After startup, upload any `.txt` document to Telegram or use Discord `/accounts file`;  it is saved as `account.txt` after validation (maximum 2 MiB).
 
 > Updates currently use a source build on the VPS. Apply them with `git pull` and rebuild the container:
 
@@ -55,11 +55,25 @@ Useful commands:
 ### 🪟 Run on Windows
 
 1. Install Go 1.22 or newer.
-2. Run `start.bat`. On first launch, it creates local configuration files and prompts for the Telegram bot token, administrator ID, and game. It then creates a sample `account.txt` and exits so you can fill it in.
+2. Run `start.bat`. On first launch, it creates local configuration files and offers Telegram or Discord, then prompts for the chosen bot token, administrator user ID, and game. It then creates a sample `account.txt` and exits so you can fill it in.
 3. Add accounts to `account.txt` using the format below, then run `start.bat` again.
 4. Keep the console open while the miner runs. The launcher builds and starts `tdm-light.exe`.
 
-To replace the account list later, send any `.txt` file to the configured Telegram bot as a document; it is saved as `account.txt`.
+To replace the account list later, send any `.txt` document to Telegram or use Discord `/accounts file`. It is saved as `account.txt`.
+
+### Bot selection and Discord setup
+
+On the first interactive launch, choose **1 — Telegram** or **2 — Discord**. The choice is saved in `config.env`; complete existing Telegram settings are adopted automatically. Only the selected bot runs. The standalone executable includes the wizard (`tdm-light.exe --setup` on Windows or `./tdm-light --setup` on Linux); systemd/Docker startup never waits for console input. To switch later, change `BOT_PLATFORM=telegram` or `BOT_PLATFORM=discord`, run setup for missing credentials, and restart. For Docker, edit `.env` and recreate the container with `docker compose up -d`. `BOT_PLATFORM=none` explicitly disables bot control.
+
+For Discord:
+
+1. Create an application and bot in the [Discord Developer Portal](https://discord.com/developers/applications), then copy the bot token.
+2. Install it on your server with `bot` and `applications.commands` scopes. Keep a shared server with the bot so you can open its profile and direct messages; server channel permissions are not used for control.
+3. Enable Discord Developer Mode and copy your **User ID**. Enter it and the bot token in the wizard, or configure `DISCORD_BOT_TOKEN` and `DISCORD_ADMIN_ID`. No channel ID is needed; old `DISCORD_CHANNEL_ID` settings are ignored.
+4. Keep the Interactions Endpoint URL empty: this bot receives commands over its outgoing Gateway connection. Message Content and other privileged intents are unnecessary. Commands are registered on connection; global commands may take time to appear.
+5. Use `/status`, `/logs login`, `/game [name]`, `/restart`, or `/accounts file`. Open the bot’s direct messages and use these slash commands there. Choose a `.txt` attachment for `/accounts`. Commands from servers, group chats, and other users are rejected. Reward notifications are sent to your DM, which the bot resolves automatically. Allow direct messages from the shared server and unblock the bot if Discord blocks delivery. Simply sending a text message or an attachment without `/accounts` is not a command.
+
+Bot network activity is independent of watch requests. Notification memory is bounded (128 entries); bursts are batched, excess notifications are counted in a summary, and delivery failures are logged. Complete reward details remain in account logs and `/status`. Discord reconnects with backoff and resumes its session when possible; API rate-limit waits are cancellable. This isolates bot outages from farming, but does not guarantee Twitch crediting or message delivery during outages.
 
 ### 👥 Account file format
 
@@ -88,11 +102,11 @@ chmod +x install.sh
 sudo ./install.sh
 ```
 
-The installer selects the `amd64` or `arm64` binary, configures Telegram and the target game, then creates and starts `tdm-light.service`. Build the bundle before copying it; binaries and archives are not stored in the source repository.
+The installer selects the `amd64` or `arm64` binary, offers Telegram or Discord and configures the target game, then creates and starts `tdm-light.service`. Build the bundle before copying it; binaries and archives are not stored in the source repository.
 
-### 🤖 Telegram bot
+### 🤖 Telegram or Discord bot
 
-The bot accepts commands from the configured administrator. Available commands include:
+The bot accepts commands from the configured administrator. Discord commands work only in the owner’s direct messages with the bot. Available commands include:
 
 | Command | Action |
 | --- | --- |
@@ -102,7 +116,7 @@ The bot accepts commands from the configured administrator. Available commands i
 | `/game <name>` | Change the target game |
 | `/restart` | Restart the miner |
 
-To update the account list, send any `.txt` file as a document. It is validated and saved as `account.txt`. The miner only accumulates watch time. At 100% it notifies you and moves on; rewards must be claimed manually.
+To update the account list, send any `.txt` document in Telegram or use `/accounts file` with an attachment in Discord. It is validated and saved as `account.txt`. The miner only accumulates watch time. At 100% it notifies you and moves on; rewards must be claimed manually.
 
 `/logs <login>` shows confirmed minutes from Twitch Inventory, including unchanged progress. Missing personal progress is shown as unavailable, rather than zero. If HLS stays unavailable after a playlist refresh, the worker switches channels and excludes the failed channel for five minutes.
 
@@ -119,7 +133,7 @@ Previous standard `accounts.txt` paths are normalized to `account.txt`. The old 
 ### 🔐 Configuration and privacy
 
 - `config.env.example` and `config.json.example` are configuration templates.
-- Docker stores persistent data in `/opt/tdm-light/data` and Telegram secrets in `/opt/tdm-light/.env`.
+- Docker stores persistent data in `/opt/tdm-light/data` and bot secrets in `/opt/tdm-light/.env`.
 - Never commit or share `account.txt`, `config.env`, `config.json`, `.env`, logs, or built binaries.
 - Local account and configuration files are excluded from Git.
 
@@ -142,8 +156,8 @@ TwitchDrops Miner Light — приложение на Go для просмотр
 - 🎯 Ищет живые каналы с включёнными Drops для выбранной игры.
 - 👥 Подключает несколько аккаунтов с распределённым стартом.
 - ⏱ Читает подтверждённые минуты из Inventory; награды получает пользователь вручную.
-- 📈 Показывает скорость начисления в Telegram и восстанавливает устойчиво медленный просмотр.
-- 🤖 Управление через Telegram: статус, логи, выбор игры, перезапуск, уведомления о наградах и загрузка списка аккаунтов.
+- 📈 Показывает скорость начисления в Telegram или Discord и восстанавливает устойчиво медленный просмотр.
+- 🤖 Выбор Telegram или Discord при первом запуске: статус, логи, выбор игры, перезапуск, уведомления о наградах и загрузка списка аккаунтов.
 - 💾 Хранит аккаунты, логи и настройки игры в постоянном локальном каталоге.
 - 🐳 Собирается и запускается на VPS через Docker Compose.
 
@@ -155,7 +169,7 @@ TwitchDrops Miner Light — приложение на Go для просмотр
 curl -fsSL https://raw.githubusercontent.com/Xyloni/tdm-light/main/deploy/bootstrap-docker.sh | sudo bash
 ```
 
-Скрипт скачает проект в `/opt/tdm-light`, запросит токен Telegram-бота, ID администратора и целевую игру, затем соберёт и запустит контейнер. Docker должен быть установлен заранее; если Docker или Compose не найдены, скрипт завершится и попросит установить их. После запуска отправь боту любой `.txt` документом: после проверки он сохранится как `account.txt` (максимум 2 МиБ).
+Скрипт скачает проект в `/opt/tdm-light`, предложит Telegram или Discord, запросит токен выбранного бота, user ID администратора и целевую игру, затем соберёт и запустит контейнер. Docker должен быть установлен заранее; если Docker или Compose не найдены, скрипт завершится и попросит установить их. После запуска отправь любой `.txt` документом в Telegram или через `/accounts file` в Discord: после проверки он сохранится как `account.txt` (максимум 2 МиБ).
 
 > Сейчас обновление выполняется сборкой исходников на самом VPS. Чтобы установить обновления, выполни `git pull` и пересобери контейнер:
 
@@ -176,11 +190,25 @@ sudo docker compose up -d --build
 ### 🪟 Запуск в Windows
 
 1. Установи Go версии 1.22 или новее.
-2. Запусти `start.bat`. При первом запуске он создаст локальные настройки, запросит токен Telegram-бота, ID администратора и игру, затем создаст образец `account.txt` и завершится, чтобы ты заполнил файл.
+2. Запусти `start.bat`. При первом запуске он создаст локальные настройки, предложит Telegram или Discord, запросит токен выбранного бота, user ID администратора и игру, затем создаст образец `account.txt` и завершится, чтобы ты заполнил файл.
 3. Добавь аккаунты в `account.txt` в формате ниже и запусти `start.bat` ещё раз.
 4. Оставь консоль открытой, пока работает майнер. Батник соберёт и запустит `tdm-light.exe`.
 
-Чтобы позже заменить список аккаунтов, отправь настроенному Telegram-боту документом любой файл `.txt`: он сохранится как `account.txt`.
+Чтобы позже заменить список аккаунтов, отправь любой `.txt` документом в Telegram или через `/accounts file` в Discord: он сохранится как `account.txt`.
+
+### Выбор бота и настройка Discord
+
+При первом интерактивном запуске выбери **1 — Telegram** или **2 — Discord**. Выбор сохраняется в `config.env`; готовые настройки Telegram подхватываются автоматически. Запускается только выбранный бот. Мастер встроен в приложение: `tdm-light.exe --setup` в Windows или `./tdm-light --setup` в Linux. Запуск службы systemd/Docker не ожидает ввода. Для смены бота измени `BOT_PLATFORM=telegram` или `BOT_PLATFORM=discord`, запусти мастер для заполнения недостающих данных и перезапусти приложение. В Docker меняй `.env` и пересоздай контейнер: `docker compose up -d`. Значение `BOT_PLATFORM=none` отключает управление через бота.
+
+Для Discord:
+
+1. Создай приложение и бота в [Discord Developer Portal](https://discord.com/developers/applications), скопируй токен бота.
+2. Добавь его на сервер со scope `bot` и `applications.commands`. Оставь общий сервер с ботом, чтобы открыть его профиль и личные сообщения. Права серверного канала для управления не используются.
+3. Включи Developer Mode в Discord, скопируй свой **User ID**. Введи его и токен бота в мастере либо заполни `DISCORD_BOT_TOKEN` и `DISCORD_ADMIN_ID`. ID канала не требуется; прежний `DISCORD_CHANNEL_ID` игнорируется.
+4. Оставь Interactions Endpoint URL пустым: команды поступают через исходящее Gateway-соединение. Message Content и другие привилегированные intents не нужны. Команды регистрируются при подключении; появление глобальных команд может занять время.
+5. Используй `/status`, `/logs login`, `/game [name]`, `/restart`, `/accounts file`. Открой личку бота и используй slash-команды там. Для `/accounts` прикрепляй `.txt`. Команды с сервера, из групповых чатов и от других пользователей отклоняются. Уведомления о наградах поступают тебе в личку; бот определит её автоматически. Если Discord блокирует доставку, разреши личные сообщения с общего сервера и разблокируй бота. Обычный текст или вложение без `/accounts` не являются командой.
+
+Запросы бота выполняются независимо от просмотра. Очередь уведомлений ограничена 128 записями; массовые уведомления объединяются, для переполнения выводится счётчик, ошибки доставки записываются в лог. Полные сведения о наградах остаются в логах аккаунтов и `/status`. Discord переподключается с увеличением пауз и по возможности восстанавливает сессию; ожидания ограничений API прерываются при остановке. Это изолирует фарм от сбоев бота, но не гарантирует начисления Twitch и доставку сообщений во время сбоев.
 
 ### 👥 Формат файла аккаунтов
 
@@ -209,11 +237,11 @@ chmod +x install.sh
 sudo ./install.sh
 ```
 
-Установщик выберет бинарник `amd64` или `arm64`, настроит Telegram и целевую игру, затем создаст и запустит службу `tdm-light.service`. Перед копированием собери комплект: готовые бинарники и архивы не хранятся в Git-репозитории.
+Установщик выберет бинарник `amd64` или `arm64`, предложит Telegram или Discord и настроит целевую игру, затем создаст и запустит службу `tdm-light.service`. Перед копированием собери комплект: готовые бинарники и архивы не хранятся в Git-репозитории.
 
-### 🤖 Telegram-бот
+### 🤖 Telegram- или Discord-бот
 
-Бот принимает команды от заданного администратора. Доступны:
+Бот принимает команды от заданного администратора. В Discord управление доступно только в личке бота. Доступны:
 
 | Команда | Действие |
 | --- | --- |
@@ -223,7 +251,7 @@ sudo ./install.sh
 | `/game <название>` | Сменить целевую игру |
 | `/restart` | Перезапустить майнер |
 
-Чтобы обновить список аккаунтов, отправь документом файл с любым именем и расширением `.txt`. Он сохранится как `account.txt`. Программа только набирает время просмотра. При 100% она уведомит вас и перейдёт дальше; получать награды нужно вручную.
+Чтобы обновить список аккаунтов, отправь любой `.txt` документом в Telegram или прикрепи его к `/accounts file` в личке Discord-бота. Он сохранится как `account.txt`. Программа только набирает время просмотра. При 100% она уведомит вас и перейдёт дальше; получать награды нужно вручную.
 
 `/logs <логин>` показывает подтверждённые минуты из Twitch Inventory, в том числе когда значение не изменилось. Отсутствие личных данных отображается отдельно, без подмены нулём. Если HLS не восстановился после обновления плейлиста, воркер меняет канал и исключает проблемный на пять минут.
 
@@ -240,7 +268,7 @@ sudo ./install.sh
 ### 🔐 Настройки и приватность
 
 - `config.env.example` и `config.json.example` — шаблоны настроек.
-- Docker хранит постоянные данные в `/opt/tdm-light/data`, а секреты Telegram — в `/opt/tdm-light/.env`.
+- Docker хранит постоянные данные в `/opt/tdm-light/data`, а секреты бота — в `/opt/tdm-light/.env`.
 - Не публикуй и не отправляй посторонним `account.txt`, `config.env`, `config.json`, `.env`, логи и собранные бинарники.
 - Локальные файлы аккаунтов и настроек исключены из Git.
 

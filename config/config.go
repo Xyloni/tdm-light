@@ -11,6 +11,9 @@ import (
 
 // Config — вся конфигурация сервиса.
 type Config struct {
+	BotPlatform             string `json:"bot_platform"`
+	DiscordBotToken         string `json:"discord_bot_token"`
+	DiscordAdminID          string `json:"discord_admin_id"`
 	TargetGame              string `json:"target_game"`                // ключевая игра для фарма
 	ClientID                string `json:"client_id"`                  // Client-ID клиента, которым выданы OAuth-токены
 	TelegramBotToken        string `json:"telegram_bot_token"`         // токен TG-бота
@@ -40,6 +43,17 @@ func Default() *Config {
 // Load читает config.json (если существует), затем применяет переопределения
 // из config.env и переменных окружения (приоритет: env > config.env > config.json).
 func Load(jsonPath, envPath string) (*Config, error) {
+	cfg, err := loadSettings(jsonPath, envPath)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(cfg.TargetGame) == "" {
+		return nil, fmt.Errorf("target_game не задан ни в config.json, ни в окружении")
+	}
+	return cfg, nil
+}
+
+func loadSettings(jsonPath, envPath string) (*Config, error) {
 	cfg := Default()
 
 	if data, err := os.ReadFile(jsonPath); err == nil {
@@ -57,10 +71,22 @@ func Load(jsonPath, envPath string) (*Config, error) {
 		cfg.AccountsFile = filepath.Join(filepath.Dir(cfg.AccountsFile), "account.txt")
 	}
 
-	if strings.TrimSpace(cfg.TargetGame) == "" {
-		return nil, fmt.Errorf("target_game не задан ни в config.json, ни в окружении")
+	cfg.BotPlatform = strings.ToLower(strings.TrimSpace(cfg.BotPlatform))
+	if cfg.BotPlatform != "" && cfg.BotPlatform != "telegram" && cfg.BotPlatform != "discord" && cfg.BotPlatform != "none" {
+		return nil, fmt.Errorf("BOT_PLATFORM: используйте telegram, discord или none")
 	}
 	return cfg, nil
+}
+
+// Platform preserves existing Telegram installations without changing their config.
+func (c *Config) Platform() string {
+	if c.BotPlatform != "" {
+		return c.BotPlatform
+	}
+	if c.TelegramBotToken != "" && c.TelegramAdminID != 0 {
+		return "telegram"
+	}
+	return "none"
 }
 
 // applyEnvFile разбирает простой KEY=VALUE файл.
@@ -84,6 +110,7 @@ func applyEnvFile(cfg *Config, path string) {
 
 func applyOSEnv(cfg *Config) {
 	for _, k := range []string{
+		"BOT_PLATFORM", "DISCORD_BOT_TOKEN", "DISCORD_ADMIN_ID",
 		"TARGET_GAME", "CLIENT_ID", "TELEGRAM_BOT_TOKEN", "TELEGRAM_ADMIN_ID",
 		"ACCOUNTS_FILE", "HEARTBEAT_INTERVAL_SEC", "CAMPAIGN_POLL_INTERVAL_SEC",
 		"JITTER_SEC", "GROUP_SESSION_MINUTES", "LOG_DIR", "USE_PUBSUB",
@@ -96,6 +123,12 @@ func applyOSEnv(cfg *Config) {
 
 func applyKV(cfg *Config, key, val string) {
 	switch strings.ToUpper(key) {
+	case "BOT_PLATFORM":
+		cfg.BotPlatform = val
+	case "DISCORD_BOT_TOKEN":
+		cfg.DiscordBotToken = val
+	case "DISCORD_ADMIN_ID":
+		cfg.DiscordAdminID = val
 	case "TARGET_GAME":
 		cfg.TargetGame = val
 	case "CLIENT_ID":

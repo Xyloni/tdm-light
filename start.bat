@@ -47,6 +47,18 @@ if not exist "account.txt" (
     set "NEEDS_ACCOUNTS_SETUP=1"
 )
 
+if not exist ".gocache" mkdir ".gocache"
+set "GOCACHE=%CD%\.gocache"
+
+echo Building tdm light...
+go build -o tdm-light.exe .
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Build failed. Check the Go error messages above.
+    pause
+    exit /b 1
+)
+
 where powershell.exe >nul 2>nul
 if errorlevel 1 (
     echo.
@@ -69,18 +81,6 @@ if defined NEEDS_ACCOUNTS_SETUP (
     echo Then run start.bat again.
     pause
     exit /b 0
-)
-
-if not exist ".gocache" mkdir ".gocache"
-set "GOCACHE=%CD%\.gocache"
-
-echo Building tdm light...
-go build -o tdm-light.exe .
-if errorlevel 1 (
-    echo.
-    echo [ERROR] Build failed. Check the Go error messages above.
-    pause
-    exit /b 1
 )
 
 echo Starting tdm light. Press Ctrl+C to stop.

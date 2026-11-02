@@ -17,6 +17,13 @@ import (
 func main() {
 	log.SetPrefix("[tdm-light] ")
 	log.SetFlags(log.LstdFlags)
+	explicitSetup := len(os.Args) == 2 && os.Args[1] == "--setup"
+	if err := config.Setup("config.json", "config.env", os.Stdin, os.Stdout, explicitSetup); err != nil {
+		log.Fatalf("настройка: %v", err)
+	}
+	if explicitSetup {
+		return
+	}
 
 	// Graceful shutdown по SIGINT/SIGTERM.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -38,7 +45,7 @@ func main() {
 		groups, err := parser.ParseFile(cfg.AccountsFile)
 		if err != nil {
 			if errors.Is(err, parser.ErrNoAccounts) || os.IsNotExist(err) {
-				log.Printf("список аккаунтов пуст или отсутствует (%s); можно отправить account.txt Telegram-боту", cfg.AccountsFile)
+				log.Printf("список аккаунтов пуст или отсутствует (%s); можно загрузить account.txt через выбранного бота", cfg.AccountsFile)
 				groups = nil
 			} else {
 				log.Fatalf("аккаунты: %v", err)

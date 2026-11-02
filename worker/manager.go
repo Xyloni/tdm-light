@@ -92,7 +92,7 @@ type Manager struct {
 	groups   [][]*parser.Account
 	states   map[string]*AccountState // ключ — login (логины должны быть уникальны)
 	http     *http.Client
-	bot      *bot.Bot
+	bot      *bot.Service
 	reloadCh chan struct{}
 
 	started      time.Time
@@ -128,20 +128,31 @@ func NewManager(cfg *config.Config, groups [][]*parser.Account, reloadCh chan st
 			m.states[acc.Login] = &AccountState{Account: acc, Status: "init", LogFile: logFile}
 		}
 	}
-	if cfg.TelegramBotToken != "" && cfg.TelegramAdminID != 0 {
-		m.bot = bot.New(cfg.TelegramBotToken, cfg.TelegramAdminID,
-			m.statusText, m.logsText, func() {
-				select {
-				case m.reloadCh <- struct{}{}:
-				default:
-				}
-			}, func() string { return m.cfg.TargetGame }, func(game string) error {
-				return saveTargetGame("config.env", game)
-			}, func(content []byte) error {
-				return replaceAccountsFile(cfg.AccountsFile, content)
-			}, states...)
-	} else {
-		log.Println("telegram-бот отключён (не заданы telegram_bot_token / telegram_admin_id)")
+	actions := bot.Actions{Status: m.statusText, Logs: m.logsText, Reload: func() {
+		select {
+		case m.reloadCh <- struct{}{}:
+		default:
+		}
+	}, Game: func() string { return m.cfg.TargetGame }, SetGame: func(game string) error {
+		return saveTargetGame("config.env", game)
+	}, Upload: func(content []byte) error {
+		return replaceAccountsFile(cfg.AccountsFile, content)
+	}}
+	switch cfg.Platform() {
+	case "telegram":
+		if cfg.TelegramBotToken != "" && cfg.TelegramAdminID != 0 {
+			m.bot = bot.NewService(bot.New(cfg.TelegramBotToken, cfg.TelegramAdminID, actions.Status, actions.Logs, actions.Reload, actions.Game, actions.SetGame, actions.Upload, states...))
+		} else {
+			log.Println("[bot] Telegram отключён: заполните TELEGRAM_BOT_TOKEN и TELEGRAM_ADMIN_ID")
+		}
+	case "discord":
+		if cfg.DiscordBotToken != "" && config.Snowflake(cfg.DiscordAdminID) {
+			m.bot = bot.NewService(bot.NewDiscord(cfg.DiscordBotToken, cfg.DiscordAdminID, actions))
+		} else {
+			log.Println("[bot] Discord отключён: заполните DISCORD_BOT_TOKEN и DISCORD_ADMIN_ID")
+		}
+	default:
+		log.Println("[bot] управление отключено; настройка: tdm-light --setup")
 	}
 	return m
 }

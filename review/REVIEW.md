@@ -1,6 +1,6 @@
 # Ревью и исправления tdm-light — 1 ноября 2026
 
-Исправления согласованы пользователем и внесены. Новых зависимостей нет.
+Исправления согласованы пользователем и внесены. Для Discord и скрытого ввода добавлены закреплённые зависимости gorilla/websocket, x/term и косвенная x/sys.
 
 ## Проверка комплекта VPS перед публикацией
 
@@ -140,3 +140,27 @@ go test ./twitch -run '^$' -fuzz FuzzWebSocketFrames -fuzztime 10s -parallel 4
 ```
 
 Регрессионные тесты включены в обычный go test ./...; overlay больше не нужен. Они не читают рабочие токены и список аккаунтов и не обращаются к Twitch/Telegram.
+
+
+## Telegram / Discord control (2026-11-02)
+
+- First interactive launch selects Telegram or Discord and saves the choice; existing complete Telegram installations are adopted. Windows and native VPS use the binary's `--setup` wizard. Docker has equivalent installer prompts and uses `.env`. Service startup does not prompt.
+- Exactly one management transport runs. Account workers enqueue notifications without waiting for network I/O. The queue holds 128 entries; bursts are batched and overflow is summarized. Failed deliveries are logged; reward details remain in account logs/status.
+- Discord uses one outgoing Gateway WebSocket, zero privileged intents, bounded command queues, deferred ephemeral replies, owner-only direct-message authorization, duplicate-event protection, session resume, missed-ACK detection, and cancellable reconnect/rate-limit waits. Attachment downloads allow only Discord CDN hosts, reject redirects, omit authorization, and enforce the 2 MiB cap before account validation/replacement.
+- Added tests for 500 concurrent notification producers (10,000 notifications during a stalled bot request), queue bounds, cancellation, authorization, duplicate commands, HTTP 429/header waits, Gateway resume/invalid session/missing ACK, upload host/size restrictions, first-launch persistence, legacy adoption, and environment priority.
+- Full Go suite, repeated runs, `go vet`, module verification, Windows and Linux amd64/arm64 builds pass. PowerShell/Bash syntax checks pass. govulncheck reports no reachable vulnerabilities.
+- Live Discord login and command responses were subsequently observed. Slash-upload URL validation was corrected after a real upload failure; prolonged live farming with Discord still needs verification. No native Linux/Docker runtime was available here. Race detector requires an installed C compiler and was not run.
+
+
+### Discord direct messages
+
+Discord management now uses the owner's bot DM. Global slash commands register only the BOT_DM context; guild, group-chat, and non-owner interactions are rejected. Notification delivery resolves and verifies the owner's DM once per manager lifetime and caches that ID behind a cancellable gate. A failed or mismatched DM result is not cached and never receives notifications. The channel ID setting is no longer required and legacy values are ignored. Setup prompts, templates, Docker installer, and both README languages were updated.
+
+Added regression checks for DM-only registration/authorization, concurrent resolution (20 sends, one create-DM request), invalid recipient/channel responses, cancellation during resolution and gate waits, and first-launch setup without a channel ID. Full tests/vet and repeated Discord/setup tests pass. Windows and Linux amd64/arm64 binaries were rebuilt. Live login and command replies have been observed. The slash-upload path fix passed regression tests; end-to-end upload success and prolonged notification delivery still require a live check.
+
+
+### v0.1.1 publication checks (2026-11-02)
+
+Slash-command uploads now accept Discord's `/ephemeral-attachments/` CDN path as well as `/attachments/`, including signed query strings and Unicode filenames. Host allowlisting, redirect rejection, omitted CDN authorization, size limits, and account-file validation remain enforced. Added regression coverage through the `/accounts` command.
+
+The latest short live run had a correlated Twitch connection failure and subsequent HLS recovery across affected accounts. This release does not claim the network failure is fixed or that prolonged farming stability has been proven. Mock load tests and build checks do not establish live Twitch crediting rates.

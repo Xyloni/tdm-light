@@ -67,7 +67,7 @@ func (b *Bot) Run(ctx context.Context) {
 	log.Println("[bot] long polling запущен")
 	for ctx.Err() == nil {
 		if err := b.poll(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("[bot] getUpdates: %v", err)
+			log.Println("[bot] getUpdates: ошибка соединения или ответа Telegram; повтор через 5 секунд")
 			if !sleepCtx(ctx, 5*time.Second) {
 				return
 			}
@@ -136,15 +136,15 @@ func (b *Bot) handle(ctx context.Context, text string, document *telegramDocumen
 	cmd := strings.ToLower(strings.SplitN(fields[0], "@", 2)[0])
 	switch cmd {
 	case "/help", "/start":
-		b.send(helpText)
+		b.sendContext(ctx, helpText)
 	case "/status":
-		b.send(b.statusFn())
+		b.sendContext(ctx, b.statusFn())
 	case "/logs":
 		if len(fields) < 2 {
-			b.send("Использование: /logs <login>")
+			b.sendContext(ctx, "Использование: /logs <login>")
 			return
 		}
-		b.send(b.logsFn(fields[1]))
+		b.sendContext(ctx, b.logsFn(fields[1]))
 	case "/game":
 		game := ""
 		if len(fields) > 1 {
@@ -157,26 +157,26 @@ func (b *Bot) handle(ctx context.Context, text string, document *telegramDocumen
 					current = configured
 				}
 			}
-			b.send("Текущая игра: " + current + "\nИзменить: /game Название игры")
+			b.sendContext(ctx, "Текущая игра: "+current+"\nИзменить: /game Название игры")
 			return
 		}
 		if b.setGame == nil {
-			b.send("Изменение игры не настроено.")
+			b.sendContext(ctx, "Изменение игры не настроено.")
 			return
 		}
 		if err := b.setGame(game); err != nil {
-			b.send("Не удалось сохранить игру: " + err.Error())
+			b.sendContext(ctx, "Не удалось сохранить игру: "+err.Error())
 			return
 		}
-		b.send("🎮 Игра сохранена: " + game + "\nПерезапускаю майнинг с новой игрой.")
+		b.sendContext(ctx, "🎮 Игра сохранена: "+game+"\nПерезапускаю майнинг с новой игрой.")
 		if b.reloadFn != nil {
 			b.reloadFn()
 		}
 	case "/restart":
-		b.send("♻️ Перезагружаю config.json и account.txt...")
+		b.sendContext(ctx, "♻️ Перезагружаю config.json и account.txt...")
 		b.reloadFn()
 	default:
-		b.send(helpText)
+		b.sendContext(ctx, helpText)
 	}
 }
 
@@ -184,27 +184,27 @@ const helpText = "Команды:\n/status — сводка фарма\n/logs <l
 
 func (b *Bot) handleAccountsDocument(ctx context.Context, fileID, fileName string, fileSize int64) {
 	if !strings.EqualFold(path.Ext(fileName), ".txt") || strings.ContainsAny(fileName, `/\\`) {
-		b.send("Пришли документ с любым названием и расширением .txt.")
+		b.sendContext(ctx, "Пришли документ с любым названием и расширением .txt.")
 		return
 	}
 	if b.uploadFn == nil {
-		b.send("Загрузка account.txt не настроена.")
+		b.sendContext(ctx, "Загрузка account.txt не настроена.")
 		return
 	}
 	if fileSize > maxAccountsUploadBytes {
-		b.send("Файл слишком большой (максимум 2 МБ).")
+		b.sendContext(ctx, "Файл слишком большой (максимум 2 МБ).")
 		return
 	}
 	content, err := b.downloadDocument(ctx, fileID)
 	if err != nil {
-		b.send("Не удалось скачать файл из Telegram: " + err.Error())
+		b.sendContext(ctx, "Не удалось скачать файл из Telegram: "+err.Error())
 		return
 	}
 	if err := b.uploadFn(content); err != nil {
-		b.send("Файл не сохранён: " + err.Error())
+		b.sendContext(ctx, "Файл не сохранён: "+err.Error())
 		return
 	}
-	b.send("✅ account.txt проверен и сохранён. Перезапускаю фарм с новым списком аккаунтов.")
+	b.sendContext(ctx, "✅ account.txt проверен и сохранён. Перезапускаю фарм с новым списком аккаунтов.")
 	if b.reloadFn != nil {
 		b.reloadFn()
 	}
@@ -265,15 +265,16 @@ func (b *Bot) downloadDocument(ctx context.Context, fileID string) ([]byte, erro
 	return content, nil
 }
 
-// Notify отправляет уведомление администратору (например, о полученном дропе).
-func (b *Bot) Notify(text string) { b.send(text) }
-
-func (b *Bot) send(text string) {
-	if len(text) > 4000 { // лимит Telegram — 4096 символов
-		text = text[:4000] + "…"
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+func (b *Bot) sendContext(parent context.Context, text string) {
+	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
+	if err := b.Send(ctx, text); err != nil && parent.Err() == nil {
+		log.Println("[bot] sendMessage: ошибка доставки")
+	}
+}
+
+func (b *Bot) Send(ctx context.Context, text string) error {
+	text = truncate(text, 4000)
 	payload, _ := json.Marshal(map[string]any{
 		"chat_id": b.adminID,
 		"text":    text,
@@ -281,15 +282,18 @@ func (b *Bot) send(text string) {
 	u := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", b.token)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(payload))
 	if err != nil {
-		return
+		return fmt.Errorf("telegram: неверный запрос")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := b.http.Do(req)
 	if err != nil {
-		log.Printf("[bot] sendMessage: %v", err)
-		return
+		return fmt.Errorf("telegram: ошибка соединения")
 	}
 	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("telegram: HTTP %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) bool {
