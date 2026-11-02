@@ -185,6 +185,9 @@ func (m *Manager) Run(parent context.Context) (reloaded bool) {
 		total += len(g)
 	}
 	log.Printf("загружено аккаунтов: %d, групп: %d, целевая игра: %q", total, len(m.groups), m.cfg.TargetGame)
+	if m.cfg.GroupSessionMinutes > 0 {
+		log.Println("GROUP_SESSION_MINUTES больше не ограничивает сессию: группы работают до завершения доступных наград")
+	}
 	if total == 0 {
 		log.Println("майнер ожидает account.txt; отправьте файл боту или добавьте его на сервер и выполните /restart")
 		select {
@@ -202,9 +205,14 @@ func (m *Manager) Run(parent context.Context) (reloaded bool) {
 				return false
 			}
 			m.currentGroup.Store(int32(gi + 1))
+			log.Printf("группа %d/%d: запуск %d аккаунтов, без часового таймера", gi+1, len(m.groups), len(group))
 			if m.runGroup(ctx, group) {
 				return true // reload
 			}
+			if parent.Err() != nil {
+				return false
+			}
+			log.Printf("группа %d/%d: воркеры завершили работу; переход к следующей группе", gi+1, len(m.groups))
 		}
 		// Completed or unauthorized groups must not cause an immediate retry loop.
 		timer := time.NewTimer(time.Until(cycleStarted.Add(time.Duration(maxInt(m.cfg.CampaignPollIntervalSec, 60)) * time.Second)))
@@ -221,19 +229,13 @@ func (m *Manager) Run(parent context.Context) (reloaded bool) {
 }
 
 // runGroup фармит одну группу: все аккаунты группы параллельно,
-// сессия ограничена group_session_minutes (0 — пока есть что фармить).
+// До завершения всех воркеров; лимита времени сессии нет.
 // Возвращает true при запросе перезагрузки.
 func (m *Manager) runGroup(ctx context.Context, group []*parser.Account) (reloaded bool) {
 	if len(group) == 0 {
 		return false
 	}
-	var sessCtx context.Context
-	var cancel context.CancelFunc
-	if m.cfg.GroupSessionMinutes > 0 {
-		sessCtx, cancel = context.WithTimeout(ctx, time.Duration(m.cfg.GroupSessionMinutes)*time.Minute)
-	} else {
-		sessCtx, cancel = context.WithCancel(ctx)
-	}
+	sessCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	var wg sync.WaitGroup
@@ -265,8 +267,25 @@ func (m *Manager) runGroup(ctx context.Context, group []*parser.Account) (reload
 	}()
 
 	select {
-	case <-done: // группа отработала свою сессию
-		return false
+	case <-done:
+		blocked := 0
+		for _, acc := range group {
+			if m.states[acc.Login].authFailed.Load() {
+				blocked++
+			}
+		}
+		if blocked == 0 {
+			return false
+		}
+		// An account stopped by invalid credentials has not completed its rewards.
+		// Keep the group selected until the owner fixes/reloads the account list.
+		log.Printf("группа не завершена: ошибок авторизации %d; исправьте аккаунты и выполните /restart", blocked)
+		select {
+		case <-m.reloadCh:
+			return true
+		case <-ctx.Done():
+			return false
+		}
 	case <-m.reloadCh: // /restart
 		cancel()
 		<-done // ждём корректного завершения всех горутин группы

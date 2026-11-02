@@ -10,7 +10,6 @@
   "heartbeat_interval_sec": 60,
   "campaign_poll_interval_sec": 120,
   "jitter_sec": 20,
-  "group_session_minutes": 60,
   "log_dir": "logs",
   "use_pubsub": false
 }

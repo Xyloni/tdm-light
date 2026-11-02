@@ -44,7 +44,9 @@ func TestReviewAuthFailureStaysDisabledBetweenSessions(t *testing.T) {
 		return reviewReply(`{"data":{"currentUser":null}}`), nil
 	})
 	for i := 0; i < 3; i++ {
-		m.runGroup(context.Background(), []*parser.Account{acc})
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+		m.runGroup(ctx, []*parser.Account{acc})
+		cancel()
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("authorization retried %d times", calls.Load())

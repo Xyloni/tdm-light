@@ -176,3 +176,14 @@ Regression tests exercise 250/500 accounts with separately stalled HLS, beacon a
 
 
 Validation for this change: full Go suite (three repetitions), additional isolation/cancellation/cadence scenarios (ten repetitions, followed by five repetitions after expanding completion tests), and go vet passed. A compiler for cgo is not installed, so the race detector was unavailable; concurrent mocked tests are not a substitute for it. Live Twitch performance after this change remains to be measured. No release is being published with this commit.
+
+
+## Complete each group before advancing (2026-11-03)
+
+Removed timed group cancellation. A group now waits for its account workers to finish all available eligible rewards; individual accounts continue between rewards independently. The old group_session_minutes / GROUP_SESSION_MINUTES value remains readable only for a migration warning and has no scheduling effect. Removed the setting from new templates. Reload/shutdown still cancels and joins the group. Terminal authorization failures keep the group waiting for corrected accounts and reload; they do not allow the next group to start. Explicit group-start/completion messages were added to the service log.
+
+Regression tests verify that a legacy positive session value does not impose a shorter context deadline and that the next group is not entered until the previous group's rewards are counted complete. Rewards are not automatically claimed. Existing cancellation/reload/auth tests and the full Go suite/vet passed.
+
+A subsequent live archive contains approximately one hour for 250 accounts, then under two minutes for a second batch. Confirmed progress for the first batch averaged 98.96% of elapsed observation time; every account was above 94%. Inventory and beacon requests had no logged failures. HLS failures recovered, with a maximum observed successful-HLS gap of 49 seconds; beacon maximum gap was 66 seconds. The original switch at one hour was caused by the old timed session, not completed campaigns. These observations are one run, not a guarantee of longer stability or 500 simultaneously active accounts.
+
+The group-completion fixture explicitly includes four unclaimed rewards. A 239/240-minute final reward keeps the account unfinished; 240/240 permits completion. A failed-authorization regression verifies that the group waits for reload instead of advancing.

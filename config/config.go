@@ -22,7 +22,7 @@ type Config struct {
 	HeartbeatIntervalSec    int    `json:"heartbeat_interval_sec"`     // интервал beacon, минимум 60 секунд; HLS отдельно каждые 20 секунд
 	CampaignPollIntervalSec int    `json:"campaign_poll_interval_sec"` // интервал опроса прогресса дропов
 	JitterSec               int    `json:"jitter_sec"`                 // ± секунд случайного разброса
-	GroupSessionMinutes     int    `json:"group_session_minutes"`      // длительность сессии группы (0 = до конца кампаний)
+	GroupSessionMinutes     int    `json:"group_session_minutes"`      // устаревшая настройка: читается для предупреждения, таймер групп отключён
 	LogDir                  string `json:"log_dir"`                    // каталог текстовых логов аккаунтов
 	UsePubSub               bool   `json:"use_pubsub"`                 // опциональный WebSocket PubSub для событий дропов
 }
@@ -35,7 +35,6 @@ func Default() *Config {
 		HeartbeatIntervalSec:    60,
 		CampaignPollIntervalSec: 120,
 		JitterSec:               20,
-		GroupSessionMinutes:     60,
 		LogDir:                  "logs",
 	}
 }
