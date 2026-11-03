@@ -425,6 +425,12 @@ type HeartbeatResult struct {
 	HLSFailed  bool // Still unavailable after refreshing; select another channel.
 }
 
+// Preserve the cause for retry classification without exposing signed URLs.
+type playbackFailure struct{ cause error }
+
+func (e *playbackFailure) Error() string { return "HLS: " + safeHeartbeatError(e.cause) }
+func (e *playbackFailure) Unwrap() error { return e.cause }
+
 // WatchHeartbeat checks the media playlist and sends the minute-watched
 // event. If the signed playlist has expired, it resolves a fresh one and
 // retries once before reporting a partial success.
@@ -461,7 +467,7 @@ func (c *GQLClient) WatchHLS(ctx context.Context, variantURL string, stream Stre
 	if playlistErr != nil {
 		freshVariant, refreshErr := c.refreshPlaylist(ctx, stream.Login)
 		if refreshErr != nil {
-			playlistErr = fmt.Errorf("%w; playlist refresh failed: %v", playlistErr, refreshErr)
+			playlistErr = errors.Join(playlistErr, fmt.Errorf("playlist refresh failed: %w", refreshErr))
 		} else {
 			result.VariantURL = freshVariant
 			playlistErr = c.watchPlaylistSegments(ctx, freshVariant)
@@ -475,7 +481,7 @@ func (c *GQLClient) WatchHLS(ctx context.Context, variantURL string, stream Stre
 	}
 	if playlistErr != nil {
 		result.HLSFailed = true
-		return result, fmt.Errorf("HLS: %s", safeHeartbeatError(playlistErr))
+		return result, &playbackFailure{cause: playlistErr}
 	}
 	result.Method = "HLS-сегменты"
 	return result, nil

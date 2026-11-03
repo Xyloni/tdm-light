@@ -28,6 +28,7 @@ type AccountState struct {
 	Status          string
 	DropsReady      int
 	readyDrops      map[string]struct{}
+	pendingDrops    map[string]struct{}
 	authFailed      atomic.Bool
 	logs            []string
 	logNext         int
@@ -92,12 +93,16 @@ func (s *AccountState) tailLogs(n int) []string {
 // Manager управляет группами аккаунтов: фарм идёт поочерёдно группами,
 // внутри группы каждый аккаунт — отдельная горутина.
 type Manager struct {
-	cfg      *config.Config
-	groups   [][]*parser.Account
-	states   map[string]*AccountState // ключ — login (логины должны быть уникальны)
-	http     *http.Client
-	bot      *bot.Service
-	reloadCh chan struct{}
+	cfg           *config.Config
+	groups        [][]*parser.Account
+	states        map[string]*AccountState // ключ — login (логины должны быть уникальны)
+	http          *http.Client
+	bot           *bot.Service
+	reloadCh      chan struct{}
+	accountGroup  map[string]int
+	rewardMu      sync.Mutex
+	rewardBatches map[rewardBatchKey]*rewardBatch
+	rewardWake    chan struct{}
 
 	started      time.Time
 	totalReady   atomic.Int64
@@ -106,11 +111,14 @@ type Manager struct {
 
 func NewManager(cfg *config.Config, groups [][]*parser.Account, reloadCh chan struct{}, states ...*bot.PollState) *Manager {
 	m := &Manager{
-		cfg:      cfg,
-		groups:   groups,
-		states:   make(map[string]*AccountState),
-		reloadCh: reloadCh,
-		started:  time.Now(),
+		cfg:           cfg,
+		groups:        groups,
+		states:        make(map[string]*AccountState),
+		accountGroup:  make(map[string]int),
+		rewardBatches: make(map[rewardBatchKey]*rewardBatch),
+		rewardWake:    make(chan struct{}, 1),
+		reloadCh:      reloadCh,
+		started:       time.Now(),
 		http: &http.Client{
 			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
@@ -123,13 +131,14 @@ func NewManager(cfg *config.Config, groups [][]*parser.Account, reloadCh chan st
 	if cfg.LogDir != "" {
 		_ = os.MkdirAll(cfg.LogDir, 0o755)
 	}
-	for _, g := range groups {
+	for groupIndex, g := range groups {
 		for _, acc := range g {
 			logFile := ""
 			if cfg.LogDir != "" {
 				logFile = filepath.Join(cfg.LogDir, acc.Login+".log")
 			}
 			m.states[acc.Login] = &AccountState{Account: acc, Status: "init", LogFile: logFile}
+			m.accountGroup[acc.Login] = groupIndex
 		}
 	}
 	actions := bot.Actions{Status: m.statusText, Logs: m.logsText, Reload: func() {
@@ -166,9 +175,16 @@ func NewManager(cfg *config.Config, groups [][]*parser.Account, reloadCh chan st
 func (m *Manager) Run(parent context.Context) (reloaded bool) {
 	ctx, cancel := context.WithCancel(parent)
 	botDone := make(chan struct{})
+	summariesDone := make(chan struct{})
+	if m.bot != nil {
+		go func() { defer close(summariesDone); m.rewardSummaryLoop(ctx) }()
+	} else {
+		close(summariesDone)
+	}
 	defer func() {
 		cancel()
 		<-botDone
+		<-summariesDone
 		m.http.CloseIdleConnections()
 	}()
 
@@ -319,12 +335,4 @@ func (m *Manager) logsText(login string) string {
 		return "Логов пока нет."
 	}
 	return progress + strings.Join(lines, "\n")
-}
-
-func (m *Manager) notifyReady(acc *parser.Account, drop twitch.Drop) {
-	m.totalReady.Add(1)
-	if m.bot != nil {
-		m.bot.Notify(fmt.Sprintf("🎁 Время для дропа набрано! Получение вручную.\nАккаунт: %s\nДроп: %s\nКампания: %s",
-			acc.Login, drop.Name, drop.CampaignName))
-	}
 }

@@ -52,7 +52,7 @@ func (m *Manager) statusTextAt(now time.Time) string {
 	if measured > 0 {
 		speed = fmt.Sprintf("%.1f%% по %d аккаунтам", rateSum/float64(measured), measured)
 	}
-	result := fmt.Sprintf("🎮 Игра: %s\n👥 Аккаунтов: %d (фармят: %d · простой: %d · ошибок: %d)\n🔢 Группа: %d/%d\n📈 Скорость начисления: %s\nОкно 10–15 мин · норма ≥90%%\n✅ Нормально: %d · отстают: %d · сбор/обновление данных: %d\n🔄 Попыток восстановления скорости: %d\n🎁 Дропов с набранным временем: %d (за этот запуск)\n⏱ Аптайм: %s",
+	result := fmt.Sprintf("🎮 Игра: %s\n👥 Аккаунтов: %d (фармят: %d · простой: %d · ошибок: %d)\n🔢 Группа: %d/%d\n📈 Скорость начисления: %s\nОкно 10–15 мин · норма ≥90%%\n✅ Нормально: %d · отстают: %d · сбор/обновление данных: %d\n🔄 Попыток восстановления скорости: %d\n🎁 Дропов с набранным временем: %d (обнаружено)\n⏱ Аптайм: %s",
 		m.cfg.TargetGame, len(m.states), farming, idle, errs, m.currentGroup.Load(), len(m.groups), speed, normal, lagging, gathering, recoveries, m.totalReady.Load(), now.Sub(m.started).Round(time.Second))
 	sort.Slice(slowest, func(i, j int) bool {
 		if slowest[i].percent == slowest[j].percent {

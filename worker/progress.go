@@ -15,6 +15,16 @@ func (s *AccountState) setProgress(drop twitch.Drop) {
 	s.RequiredMinutes = drop.Required
 	s.ProgressKnown = drop.ProgressKnown
 	s.ProgressChecked = time.Now()
+	s.observePendingLocked(drop)
+}
+
+func (s *AccountState) observePendingLocked(drop twitch.Drop) {
+	if drop.ID != "" && drop.ProgressKnown && !drop.IsClaimed && drop.Required > 0 && drop.Current < drop.Required {
+		if s.pendingDrops == nil {
+			s.pendingDrops = make(map[string]struct{})
+		}
+		s.pendingDrops[drop.ID] = struct{}{}
+	}
 }
 
 func (w *accountWorker) reportProgress(drop twitch.Drop) {

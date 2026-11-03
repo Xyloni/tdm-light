@@ -107,6 +107,7 @@ func (w *accountWorker) nextDrop(ctx context.Context) (twitch.Drop, bool, error)
 			continue
 		}
 		if d.IsClaimed {
+			w.markReady(d)
 			continue
 		}
 		if d.Required <= 0 {
@@ -117,6 +118,9 @@ func (w *accountWorker) nextDrop(ctx context.Context) (twitch.Drop, bool, error)
 			w.markReady(d)
 			continue
 		}
+		w.st.mu.Lock()
+		w.st.observePendingLocked(d)
+		w.st.mu.Unlock()
 		return d, true, nil
 	}
 	return twitch.Drop{}, false, nil
@@ -144,7 +148,7 @@ func (w *accountWorker) farmDropScheduled(parent context.Context, rnd *rand.Rand
 	w.st.clearWatchRate()
 	defer w.st.clearWatchRate()
 	w.st.setStatus("farm: " + drop.CampaignName)
-	w.st.addLog("фарм дропа «" + drop.Name + "» начат")
+	w.st.addLog(fmt.Sprintf("фарм дропа «%s» начат (цель %d мин)", drop.Name, drop.Required))
 	w.reportProgress(drop)
 
 	streams := newWatchStream(ctx)
@@ -162,6 +166,7 @@ func (w *accountWorker) farmDropScheduled(parent context.Context, rnd *rand.Rand
 	var stream twitch.Stream
 	nextHLS := time.Time{}
 	nextOpen := time.Time{}
+	openFailures := 0
 	var rate watchRate
 	var rateStarted time.Time
 	handleProgress := func(result inventoryResult) bool {
@@ -257,7 +262,10 @@ func (w *accountWorker) farmDropScheduled(parent context.Context, rnd *rand.Rand
 					return err
 				}
 				w.st.addLog("поиск канала: " + err.Error())
-				nextOpen = time.Now().Add(jittered(rnd, 30*time.Second, w.m.cfg.JitterSec))
+				openFailures++
+				delay := channelRetryDelay(err, openFailures, rnd)
+				nextOpen = time.Now().Add(delay)
+				w.st.addLog(fmt.Sprintf("следующая попытка выбора канала через %s", delay.Round(time.Second)))
 				continue // Inventory continues during the bounded playback retry pause.
 			}
 			stream, variant = selected, playlist
@@ -279,7 +287,8 @@ func (w *accountWorker) farmDropScheduled(parent context.Context, rnd *rand.Rand
 			nextHLS = signalDeadline(nextHLS, started, time.Now(), intervals.hls)
 			if err != nil {
 				w.st.addLog(fmt.Sprintf("канал %s: HLS не восстановлен (%v; %.1f с), переключаю канал", stream.Login, err, time.Since(started).Seconds()))
-				w.excludeChannel(stream.Login)
+				duration := w.excludeFailedChannel(stream.Login, err, rnd)
+				w.st.addLog(fmt.Sprintf("канал %s: пауза %s", stream.Login, duration))
 				streams.clear()
 				w.st.clearWatchRate()
 				variant = ""
@@ -288,6 +297,7 @@ func (w *accountWorker) farmDropScheduled(parent context.Context, rnd *rand.Rand
 			if result.VariantURL != "" {
 				variant = result.VariantURL
 			}
+			openFailures = 0
 			if result.Warning != "" {
 				w.st.addLog("HLS предупреждение: " + result.Warning)
 			}
@@ -300,7 +310,8 @@ func (w *accountWorker) farmDropScheduled(parent context.Context, rnd *rand.Rand
 	return nil
 }
 
-// markReady counts and announces each completed drop once per manager lifetime.
+// Count ready rewards, but announce only a transition from confirmed unfinished
+// minutes. Already-ready rewards discovered at startup are silent baselines.
 func (w *accountWorker) markReady(drop twitch.Drop) {
 	w.st.mu.Lock()
 	if w.st.readyDrops == nil {
@@ -312,9 +323,14 @@ func (w *accountWorker) markReady(drop twitch.Drop) {
 	}
 	w.st.readyDrops[drop.ID] = struct{}{}
 	w.st.DropsReady++
+	_, announce := w.st.pendingDrops[drop.ID]
+	announce = announce && !drop.IsClaimed
+	delete(w.st.pendingDrops, drop.ID)
 	w.st.mu.Unlock()
-	w.st.addLog("✅ ВРЕМЯ НАБРАНО: " + drop.Name + "; получение вручную")
-	w.m.notifyReady(w.acc, drop)
+	if announce {
+		w.st.addLog(fmt.Sprintf("✅ ВРЕМЯ НАБРАНО: %s (%d/%d мин); получение вручную", drop.Name, drop.Current, drop.Required))
+	}
+	w.m.recordReady(w.acc, drop, announce)
 }
 
 func (w *accountWorker) findDrop(ctx context.Context, dropID string) (twitch.Drop, bool, error) {

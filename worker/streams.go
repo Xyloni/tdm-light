@@ -2,8 +2,14 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"math/rand"
+	"net"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/xyloni/tdm-light/twitch"
@@ -12,6 +18,10 @@ import (
 const channelCooldown = 5 * time.Minute
 
 func (w *accountWorker) excludeChannel(login string) {
+	w.cooldownChannel(login, channelCooldown)
+}
+
+func (w *accountWorker) cooldownChannel(login string, duration time.Duration) {
 	if w.unavailable == nil {
 		w.unavailable = make(map[string]time.Time)
 	}
@@ -22,7 +32,89 @@ func (w *accountWorker) excludeChannel(login string) {
 			delete(w.unavailable, channel)
 		}
 	}
-	w.unavailable[login] = now.Add(channelCooldown)
+	until := now.Add(duration)
+	if until.After(w.unavailable[login]) {
+		w.unavailable[login] = until
+	}
+}
+
+var playbackStatusRE = regexp.MustCompile(`HTTP (\d{3})`)
+
+func temporaryPlaybackError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var network net.Error
+	if errors.As(err, &network) {
+		return true
+	}
+	if status := playbackStatusRE.FindStringSubmatch(err.Error()); status != nil {
+		code, _ := strconv.Atoi(status[1])
+		if code == 408 || code == 429 || (code >= 500 && code <= 599) {
+			return true
+		}
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, cause := range joined.Unwrap() {
+			if temporaryPlaybackError(cause) {
+				return true
+			}
+		}
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if temporaryPlaybackError(wrapped.Unwrap()) {
+			return true
+		}
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unexpected eof") || strings.Contains(message, "connection reset") || strings.Contains(message, "connection force closed")
+}
+
+func (w *accountWorker) excludeFailedChannel(login string, err error, rnd *rand.Rand) time.Duration {
+	duration := channelCooldown
+	if temporaryPlaybackError(err) {
+		duration = time.Duration(20+rnd.Intn(11)) * time.Second
+	}
+	w.cooldownChannel(login, duration)
+	return duration
+}
+
+type channelRetryError struct {
+	attempts int
+	retryAt  time.Time
+}
+
+func (e *channelRetryError) Error() string {
+	return fmt.Sprintf("каналы временно недоступны (проверено %d); повтор с учётом окончания исключения", e.attempts)
+}
+
+func channelRetryDelay(err error, failures int, rnd *rand.Rand) time.Duration {
+	var retry *channelRetryError
+	if errors.As(err, &retry) && !retry.retryAt.IsZero() {
+		delay := maxDuration(time.Until(retry.retryAt), time.Second)
+		if delay > time.Minute {
+			delay = time.Minute
+		} // Check the directory for new streams without probing excluded ones.
+		return delay + time.Duration(rnd.Intn(4))*time.Second
+	}
+	if failures < 1 {
+		failures = 1
+	}
+	if failures > 3 {
+		failures = 3
+	}
+	base := time.Duration(15*(1<<(failures-1))) * time.Second
+	return base + time.Duration(rnd.Intn(11))*time.Second
+}
+
+func maxDuration(a, b time.Duration) time.Duration {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (w *accountWorker) openStream(ctx context.Context, rnd *rand.Rand) (twitch.Stream, string, error) {
@@ -72,12 +164,19 @@ func (w *accountWorker) openStreamExcept(ctx context.Context, rnd *rand.Rand, ex
 		return twitch.Stream{}, "", err
 	}
 	attempts := 0
+	var earliest time.Time
+	noteRetry := func(until time.Time) {
+		if !until.IsZero() && (earliest.IsZero() || until.Before(earliest)) {
+			earliest = until
+		}
+	}
 	for _, i := range rnd.Perm(len(streams)) {
 		s := streams[i]
 		if s.Login == excluded {
 			continue
 		}
 		if time.Now().Before(w.unavailable[s.Login]) {
+			noteRetry(w.unavailable[s.Login])
 			continue
 		}
 		if err := ctx.Err(); err != nil {
@@ -86,6 +185,7 @@ func (w *accountWorker) openStreamExcept(ctx context.Context, rnd *rand.Rand, ex
 		attempts++
 		variant, err := w.openChannel(ctx, s)
 		if err == nil {
+			delete(w.unavailable, s.Login)
 			return s, variant, nil
 		}
 		if ctx.Err() != nil {
@@ -94,12 +194,21 @@ func (w *accountWorker) openStreamExcept(ctx context.Context, rnd *rand.Rand, ex
 		if isAuthError(err) {
 			return twitch.Stream{}, "", err
 		}
-		w.excludeChannel(s.Login)
+		duration := w.excludeFailedChannel(s.Login, err, rnd)
+		noteRetry(w.unavailable[s.Login])
 		// Do not print signed playlist URLs from transport errors.
-		w.st.addLog("не удалось открыть канал " + s.Login + "; исключён на 5 минут")
+		w.st.addLog(fmt.Sprintf("не удалось открыть канал %s; пауза %s", s.Login, duration))
 		if attempts >= 3 {
 			break // Bound recovery work before the worker's normal retry pause.
 		}
 	}
-	return twitch.Stream{}, "", fmt.Errorf("нет доступных каналов вне временного исключения (проверено %d); повтор после паузы", attempts)
+	// The three-attempt cap may leave other candidates untried. Do not wait
+	// five minutes just because the attempted candidates returned hard failures.
+	if attempts > 0 {
+		soon := time.Now().Add(15 * time.Second)
+		if earliest.IsZero() || earliest.After(soon) {
+			earliest = soon
+		}
+	}
+	return twitch.Stream{}, "", &channelRetryError{attempts: attempts, retryAt: earliest}
 }
