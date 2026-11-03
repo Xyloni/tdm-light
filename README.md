@@ -114,6 +114,8 @@ The bot accepts commands from the configured administrator. Discord commands wor
 | `/logs <login>` | Show logs for an account |
 | `/game` | Show or choose the target game |
 | `/game <name>` | Change the target game |
+| `/exclude [name]` | List exclusions, or exclude a reward by full name |
+| `/include <name>` | Return a reward to farming |
 | `/restart` | Restart the miner |
 
 To update the account list, send any `.txt` document in Telegram or use `/accounts file` with an attachment in Discord. It is validated and saved as `account.txt`. The miner only accumulates watch time. At 100% it notifies you and moves on; rewards must be claimed manually.
@@ -135,6 +137,12 @@ Crediting speed uses confirmed Inventory progress over a 10–15 minute window w
 Previous standard `accounts.txt` paths are normalized to `account.txt`. The old list is moved only when the new file is absent; an existing `account.txt` takes precedence. Explicit custom filenames remain supported. Duplicate logins, including case-only duplicates, are rejected.
 
 Reward notifications are grouped by account group, campaign, and reward ID. Newly completed accounts are summarized at most once per minute per reward/group; a reward completed by the whole group triggers a final summary promptly. Account details stay in `/logs`. Rewards already complete or claimed when first discovered are counted silently, including after reload/restart. Only a transition from confirmed unfinished minutes triggers a new completion notice. Identical reward names are distinguished by their target minutes. `/status` counts discovered ready rewards rather than implying they were all earned during the current run.
+
+### Exclude unwanted rewards
+
+Use `/exclude Hunt White` to exclude a reward, `/include Hunt White` to restore it, and `/exclude` to view the list. In Discord, choose the slash-command `name` option. Names match in full, case-insensitively, across all campaigns. Saving an exclusion reloads group processing. Excluded rewards are not farmed, counted as completed, or allowed to hold up a completed group.
+
+`Hunt White` is excluded by default. Configure `IGNORED_DROP_NAMES=Hunt White, Other reward` in `config.env` (Docker: `data/config.env`), or `"ignored_drop_names": ["Hunt White"]` in `config.json`. An empty environment-file value or empty JSON array enables all rewards. Commands save the list as a JSON array in `config.env` to preserve names containing commas. An OS/container `IGNORED_DROP_NAMES` variable overrides the file and prevents bot edits until removed. An unknown progress value for any non-excluded reward remains unknown, rather than being treated as completed.
 
 ### 🔐 Configuration and privacy
 
@@ -255,6 +263,8 @@ sudo ./install.sh
 | `/logs <логин>` | Показать логи аккаунта |
 | `/game` | Показать или выбрать целевую игру |
 | `/game <название>` | Сменить целевую игру |
+| `/exclude [название]` | Показать исключения или исключить награду по полному названию |
+| `/include <название>` | Вернуть награду в фарм |
 | `/restart` | Перезапустить майнер |
 
 Чтобы обновить список аккаунтов, отправь любой `.txt` документом в Telegram или прикрепи его к `/accounts file` в личке Discord-бота. Он сохранится как `account.txt`. Программа только набирает время просмотра. При 100% она уведомит вас и перейдёт дальше; получать награды нужно вручную.
@@ -276,6 +286,12 @@ HLS, маяк minute-watched и Inventory теперь выполняются н
 Прежние стандартные пути `accounts.txt` нормализуются в `account.txt`. Старый список переносится только при отсутствии нового файла; существующий `account.txt` имеет приоритет. Нестандартные имена из конфига поддерживаются. Дубли логинов, в том числе отличающиеся только регистром, отклоняются.
 
 Уведомления о наградах объединяются по группе аккаунтов, кампании и ID награды. Новые завершения суммируются не чаще раза в минуту на награду/группу; когда награда готова у всей группы, итоговая сводка сразу ставится в очередь отправки. Данные отдельных аккаунтов остаются в `/logs`. Награды, которые при первом обнаружении уже готовы или получены, учитываются молча, в том числе после перезагрузки и перезапуска. Новое уведомление создаётся только при переходе от подтверждённого незавершённого прогресса к готовому. Одинаковые названия различаются целевыми минутами. Счётчик `/status` показывает обнаруженные готовые награды и не означает, что все они заработаны за текущий запуск.
+
+### Исключение ненужных наград
+
+`/exclude Hunt White` исключает награду, `/include Hunt White` возвращает её в фарм, `/exclude` показывает список. В Discord укажи название в параметре slash-команды `name`. Сопоставление — по полному названию без учёта регистра, для всех кампаний. Сохранение исключения перезапускает обработку групп. Исключённые награды не фармятся, не считаются завершёнными и не удерживают уже завершённую группу.
+
+По умолчанию исключён `Hunt White`. Можно задать `IGNORED_DROP_NAMES=Hunt White, Other reward` в `config.env` (Docker: `data/config.env`) либо `"ignored_drop_names": ["Hunt White"]` в `config.json`. Пустое значение в env-файле или пустой JSON-массив разрешают все награды. Команды сохраняют список как JSON-массив в `config.env`, поэтому названия с запятыми не разбиваются. Переменная `IGNORED_DROP_NAMES` в окружении ОС/контейнера перекрывает файл и запрещает правки через бота, пока её не удалят. Неизвестный прогресс любой другой награды по-прежнему не считается завершением.
 
 ### 🔐 Настройки и приватность
 

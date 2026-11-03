@@ -150,11 +150,15 @@ func NewManager(cfg *config.Config, groups [][]*parser.Account, reloadCh chan st
 		return saveTargetGame("config.env", game)
 	}, Upload: func(content []byte) error {
 		return replaceAccountsFile(cfg.AccountsFile, content)
+	}, Excluded: func() []string { return append([]string(nil), m.cfg.IgnoredDropNames...) }, SetExcluded: func(name string, exclude bool) error {
+		return saveDropExclusion("config.env", name, exclude)
 	}}
 	switch cfg.Platform() {
 	case "telegram":
 		if cfg.TelegramBotToken != "" && cfg.TelegramAdminID != 0 {
-			m.bot = bot.NewService(bot.New(cfg.TelegramBotToken, cfg.TelegramAdminID, actions.Status, actions.Logs, actions.Reload, actions.Game, actions.SetGame, actions.Upload, states...))
+			telegram := bot.New(cfg.TelegramBotToken, cfg.TelegramAdminID, actions.Status, actions.Logs, actions.Reload, actions.Game, actions.SetGame, actions.Upload, states...)
+			telegram.ConfigureExclusions(actions.Excluded, actions.SetExcluded)
+			m.bot = bot.NewService(telegram)
 		} else {
 			log.Println("[bot] Telegram отключён: заполните TELEGRAM_BOT_TOKEN и TELEGRAM_ADMIN_ID")
 		}

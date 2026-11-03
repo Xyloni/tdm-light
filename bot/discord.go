@@ -17,12 +17,14 @@ import (
 )
 
 type Actions struct {
-	Status  func() string
-	Logs    func(string) string
-	Reload  func()
-	Game    func() string
-	SetGame func(string) error
-	Upload  func([]byte) error
+	Status      func() string
+	Logs        func(string) string
+	Reload      func()
+	Game        func() string
+	SetGame     func(string) error
+	Upload      func([]byte) error
+	Excluded    func() []string
+	SetExcluded func(string, bool) error
 }
 
 type discordAttachment struct {
@@ -230,6 +232,10 @@ func (d *Discord) command(ctx context.Context, i discordInteraction) (string, bo
 		return ""
 	}
 	switch i.Data.Name {
+	case "exclude":
+		return exclusionCommand(option("name"), true, d.actions.Excluded, d.actions.SetExcluded)
+	case "include":
+		return exclusionCommand(option("name"), false, d.actions.Excluded, d.actions.SetExcluded)
 	case "status":
 		return d.actions.Status(), false
 	case "logs":
@@ -262,7 +268,7 @@ func (d *Discord) command(ctx context.Context, i discordInteraction) (string, bo
 		}
 		return "account.txt проверен и сохранён. Перезапускаю фарм.", true
 	default:
-		return "Команды: /status, /logs login, /game [name], /restart, /accounts file. Управление доступно только владельцу в личке бота.", false
+		return "Команды: /status, /logs login, /game [name], /exclude [name], /include name, /restart, /accounts file. Управление доступно только владельцу в личке бота.", false
 	}
 }
 
@@ -312,6 +318,8 @@ func discordCommands() []map[string]any {
 		{"game", "Show or change target game / Целевая игра", []map[string]any{{"type": 3, "name": "name", "description": "Target game", "max_length": 200}}},
 		{"restart", "Reload config and accounts / Перезапуск", nil},
 		{"accounts", "Upload a .txt account file / Загрузка аккаунтов", []map[string]any{{"type": 11, "name": "file", "description": "Any .txt file, maximum 2 MiB", "required": true}}},
+		{"exclude", "Show or add excluded reward / Исключить награду", []map[string]any{{"type": 3, "name": "name", "description": "Full reward name", "max_length": 200}}},
+		{"include", "Remove excluded reward / Вернуть награду", []map[string]any{{"type": 3, "name": "name", "description": "Full reward name", "max_length": 200, "required": true}}},
 	} {
 		command := map[string]any{"name": c.name, "description": c.description, "type": 1, "contexts": []int{1}, "integration_types": []int{0}}
 		if len(c.options) > 0 {

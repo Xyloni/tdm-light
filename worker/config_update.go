@@ -1,11 +1,55 @@
 package worker
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
+
+	"github.com/xyloni/tdm-light/config"
 )
+
+func saveDropExclusion(filePath, name string, exclude bool) error {
+	name = strings.TrimSpace(name)
+	if name == "" || len([]rune(name)) > 200 {
+		return fmt.Errorf("название должно содержать от 1 до 200 символов")
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("название содержит управляющие символы")
+		}
+	}
+	if _, exists := os.LookupEnv("IGNORED_DROP_NAMES"); exists {
+		return fmt.Errorf("IGNORED_DROP_NAMES задан в окружении; измените его там или удалите переменную")
+	}
+	// Read the latest file for every command; queued commands during reload must
+	// not overwrite exclusions saved by the previous command.
+	cfg, err := config.Load(filepath.Join(filepath.Dir(filePath), "config.json"), filePath)
+	if err != nil {
+		return err
+	}
+	names := []string{}
+	found := false
+	for _, previous := range cfg.IgnoredDropNames {
+		if strings.EqualFold(strings.TrimSpace(previous), name) {
+			found = true
+			if !exclude {
+				continue
+			}
+		}
+		names = append(names, previous)
+	}
+	if exclude && !found {
+		names = append(names, name)
+	}
+	data, err := json.Marshal(names)
+	if err != nil {
+		return err
+	}
+	return updateEnvSetting(filePath, "IGNORED_DROP_NAMES", string(data))
+}
 
 // Environment configuration keeps its documented priority. Do not report a
 // successful change when that environment would silently undo it on reload.

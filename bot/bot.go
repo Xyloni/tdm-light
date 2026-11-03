@@ -35,12 +35,19 @@ type Bot struct {
 	http      *http.Client
 	pollState *PollState
 
-	statusFn func() string
-	logsFn   func(login string) string
-	reloadFn func()
-	gameFn   func() string
-	setGame  func(string) error
-	uploadFn func([]byte) error
+	statusFn      func() string
+	logsFn        func(login string) string
+	reloadFn      func()
+	gameFn        func() string
+	setGame       func(string) error
+	uploadFn      func([]byte) error
+	excludedFn    func() []string
+	setExcludedFn func(string, bool) error
+}
+
+func (b *Bot) ConfigureExclusions(get func() []string, set func(string, bool) error) {
+	b.excludedFn = get
+	b.setExcludedFn = set
 }
 
 func New(token string, adminID int64, statusFn func() string, logsFn func(string) string, reloadFn func(), gameFn func() string, setGame func(string) error, uploadFn func([]byte) error, states ...*PollState) *Bot {
@@ -135,6 +142,13 @@ func (b *Bot) handle(ctx context.Context, text string, document *telegramDocumen
 	}
 	cmd := strings.ToLower(strings.SplitN(fields[0], "@", 2)[0])
 	switch cmd {
+	case "/exclude", "/include":
+		name := strings.TrimSpace(text[len(fields[0]):])
+		response, reload := exclusionCommand(name, cmd == "/exclude", b.excludedFn, b.setExcludedFn)
+		b.sendContext(ctx, response)
+		if reload && b.reloadFn != nil {
+			b.reloadFn()
+		}
 	case "/help", "/start":
 		b.sendContext(ctx, helpText)
 	case "/status":
@@ -180,7 +194,7 @@ func (b *Bot) handle(ctx context.Context, text string, document *telegramDocumen
 	}
 }
 
-const helpText = "Команды:\n/status — сводка фарма\n/logs <login> — последние логи аккаунта\n/game — показать текущую игру\n/game <название> — сменить игру и перезапустить майнинг\n/restart — перечитать конфиг и account.txt\n\nЧтобы загрузить аккаунты, отправьте любой .txt документом. Файл будет проверен, сохранён как account.txt и майнинг перезапустится."
+const helpText = "Команды:\n/status — сводка фарма\n/logs <login> — последние логи аккаунта\n/game — показать текущую игру\n/game <название> — сменить игру и перезапустить майнинг\n/exclude [название] — показать список или исключить награду\n/include <название> — вернуть награду\n/restart — перечитать конфиг и account.txt\n\nЧтобы загрузить аккаунты, отправьте любой .txt документом. Файл будет проверен, сохранён как account.txt и майнинг перезапустится."
 
 func (b *Bot) handleAccountsDocument(ctx context.Context, fileID, fileName string, fileSize int64) {
 	if !strings.EqualFold(path.Ext(fileName), ".txt") || strings.ContainsAny(fileName, `/\\`) {

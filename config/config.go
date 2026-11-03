@@ -11,10 +11,12 @@ import (
 
 // Config — вся конфигурация сервиса.
 type Config struct {
-	BotPlatform             string `json:"bot_platform"`
-	DiscordBotToken         string `json:"discord_bot_token"`
-	DiscordAdminID          string `json:"discord_admin_id"`
-	TargetGame              string `json:"target_game"`                // ключевая игра для фарма
+	BotPlatform             string   `json:"bot_platform"`
+	DiscordBotToken         string   `json:"discord_bot_token"`
+	DiscordAdminID          string   `json:"discord_admin_id"`
+	TargetGame              string   `json:"target_game"` // ключевая игра для фарма
+	IgnoredDropNames        []string `json:"ignored_drop_names"`
+	ignoredDropParseErr     error
 	ClientID                string `json:"client_id"`                  // Client-ID клиента, которым выданы OAuth-токены
 	TelegramBotToken        string `json:"telegram_bot_token"`         // токен TG-бота
 	TelegramAdminID         int64  `json:"telegram_admin_id"`          // ID администратора (chat_id)
@@ -30,6 +32,7 @@ type Config struct {
 // Default возвращает конфигурацию с безопасными значениями по умолчанию.
 func Default() *Config {
 	return &Config{
+		IgnoredDropNames:        []string{"Hunt White"},
 		ClientID:                "kd1unb4b3q4t58fwlpcbzcbnm76a8fp", // Client-ID приложения Twitch для Android
 		AccountsFile:            "account.txt",
 		HeartbeatIntervalSec:    60,
@@ -65,6 +68,9 @@ func loadSettings(jsonPath, envPath string) (*Config, error) {
 
 	applyEnvFile(cfg, envPath)
 	applyOSEnv(cfg)
+	if cfg.ignoredDropParseErr != nil {
+		return nil, cfg.ignoredDropParseErr
+	}
 	// Normalize the previous conventional filename, including absolute Docker paths.
 	if filepath.Base(cfg.AccountsFile) == "accounts.txt" {
 		cfg.AccountsFile = filepath.Join(filepath.Dir(cfg.AccountsFile), "account.txt")
@@ -111,6 +117,7 @@ func applyOSEnv(cfg *Config) {
 	for _, k := range []string{
 		"BOT_PLATFORM", "DISCORD_BOT_TOKEN", "DISCORD_ADMIN_ID",
 		"TARGET_GAME", "CLIENT_ID", "TELEGRAM_BOT_TOKEN", "TELEGRAM_ADMIN_ID",
+		"IGNORED_DROP_NAMES",
 		"ACCOUNTS_FILE", "HEARTBEAT_INTERVAL_SEC", "CAMPAIGN_POLL_INTERVAL_SEC",
 		"JITTER_SEC", "GROUP_SESSION_MINUTES", "LOG_DIR", "USE_PUBSUB",
 	} {
@@ -130,6 +137,23 @@ func applyKV(cfg *Config, key, val string) {
 		cfg.DiscordAdminID = val
 	case "TARGET_GAME":
 		cfg.TargetGame = val
+	case "IGNORED_DROP_NAMES":
+		cfg.ignoredDropParseErr = nil
+		if strings.HasPrefix(val, "[") {
+			var names []string
+			if json.Unmarshal([]byte(val), &names) == nil {
+				cfg.IgnoredDropNames = names
+			} else {
+				cfg.ignoredDropParseErr = fmt.Errorf("IGNORED_DROP_NAMES: неверный JSON-массив названий")
+			}
+		} else {
+			cfg.IgnoredDropNames = nil
+			for _, name := range strings.Split(val, ",") {
+				if name = strings.TrimSpace(name); name != "" {
+					cfg.IgnoredDropNames = append(cfg.IgnoredDropNames, name)
+				}
+			}
+		}
 	case "CLIENT_ID":
 		cfg.ClientID = val
 	case "TELEGRAM_BOT_TOKEN":
@@ -161,4 +185,13 @@ func applyKV(cfg *Config, key, val string) {
 	case "USE_PUBSUB":
 		cfg.UsePubSub = val == "1" || strings.EqualFold(val, "true")
 	}
+}
+
+func (c *Config) DropIgnored(name string) bool {
+	for _, ignored := range c.IgnoredDropNames {
+		if strings.TrimSpace(ignored) != "" && strings.EqualFold(strings.TrimSpace(ignored), strings.TrimSpace(name)) {
+			return true
+		}
+	}
+	return false
 }

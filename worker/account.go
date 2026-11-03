@@ -106,6 +106,9 @@ func (w *accountWorker) nextDrop(ctx context.Context) (twitch.Drop, bool, error)
 		if d.CampaignStatus != "" && !strings.EqualFold(d.CampaignStatus, "ACTIVE") {
 			continue
 		}
+		if w.m.cfg.DropIgnored(d.Name) {
+			continue
+		}
 		if d.IsClaimed {
 			w.markReady(d)
 			continue

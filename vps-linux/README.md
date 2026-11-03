@@ -27,7 +27,7 @@ sudo journalctl -u tdm-light -f
 sudo systemctl restart tdm-light
 ```
 
-The bot supports `/status`, `/logs <login>`, `/game`, `/game <name>`, `/restart`, reward notifications, and uploading `account.txt`. `/game <name>` changes the target and reloads the miner. You can also edit `TARGET_GAME` in `/opt/tdm-light/config.env` and use `/restart`.
+The bot supports `/status`, `/logs <login>`, `/game`, `/game <name>`, `/restart`, reward notifications, `/exclude [name]`, `/include name`, and uploading `account.txt`. `/game <name>` changes the target and reloads the miner. You can also edit `TARGET_GAME` in `/opt/tdm-light/config.env` and use `/restart`.
 
 The account list and bot credentials are stored on the server with owner-only file permissions. Keep SSH access restricted to trusted administrators. See the main README for Discord app installation and direct messages.
 
@@ -62,6 +62,6 @@ sudo journalctl -u tdm-light -f
 sudo systemctl restart tdm-light
 ```
 
-Бот поддерживает `/status`, `/logs <логин>`, `/game`, `/game <название>`, `/restart`, уведомления о наградах и загрузку `account.txt`. Команда `/game <название>` меняет игру и перезапускает майнер. Можно также изменить `TARGET_GAME` в `/opt/tdm-light/config.env` и выполнить `/restart`.
+Бот поддерживает `/status`, `/logs <логин>`, `/game`, `/game <название>`, `/restart`, уведомления о наградах, `/exclude [название]`, `/include название` и загрузку `account.txt`. Команда `/game <название>` меняет игру и перезапускает майнер. Можно также изменить `TARGET_GAME` в `/opt/tdm-light/config.env` и выполнить `/restart`.
 
 Список аккаунтов и настройки бота хранятся на сервере с доступом только владельца файла. Ограничь SSH-доступ доверенными администраторами. Настройка приложения Discord и личных сообщений описана в основном README.
