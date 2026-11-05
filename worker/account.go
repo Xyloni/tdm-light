@@ -170,6 +170,9 @@ func (w *accountWorker) farmDropScheduled(parent context.Context, rnd *rand.Rand
 	nextHLS := time.Time{}
 	nextOpen := time.Time{}
 	openFailures := 0
+	transientFailures := 0
+	var overall watchRate
+	overall.reset(time.Now(), drop.Current, drop.ProgressKnown)
 	var rate watchRate
 	var rateStarted time.Time
 	handleProgress := func(result inventoryResult) bool {
@@ -187,6 +190,8 @@ func (w *accountWorker) farmDropScheduled(parent context.Context, rnd *rand.Rand
 			return true
 		}
 		w.reportProgress(cur)
+		overall.observe(result.checked, cur.Current, cur.ProgressKnown, 2*intervals.progress+time.Minute)
+		w.st.setWatchRate(&overall)
 		drop = cur
 		if cur.ProgressKnown && cur.Current >= cur.Required {
 			w.markReady(cur)
@@ -198,12 +203,11 @@ func (w *accountWorker) farmDropScheduled(parent context.Context, rnd *rand.Rand
 			return false
 		}
 		slow, gain, elapsed := rate.observe(result.checked, cur.Current, cur.ProgressKnown, 2*intervals.progress+time.Minute)
-		w.st.setWatchRate(&rate)
+		// Overall status includes playback outages and channel switches.
 		if slow && w.reserveRateRecovery(result.checked, rnd) {
 			w.st.mu.Lock()
 			w.st.rateRecoveries++
 			w.st.mu.Unlock()
-			w.st.clearWatchRate()
 			w.st.addLog(fmt.Sprintf("медленное начисление на %s: +%d мин за %.1f мин; восстанавливаю просмотр", stream.Login, gain, elapsed.Minutes()))
 			recoveryCtx, stop := context.WithTimeout(ctx, budgets.recovery)
 			selected, playlist, err := w.recoverSlowStream(recoveryCtx, rnd, stream)
@@ -274,7 +278,6 @@ func (w *accountWorker) farmDropScheduled(parent context.Context, rnd *rand.Rand
 			stream, variant = selected, playlist
 			rateStarted = time.Now()
 			rate.reset(rateStarted, drop.Current, drop.ProgressKnown)
-			w.st.clearWatchRate()
 			streams.set(stream)
 			nextHLS = time.Time{}
 			w.st.addLog("просмотр канала: " + stream.Login)
@@ -289,14 +292,24 @@ func (w *accountWorker) farmDropScheduled(parent context.Context, rnd *rand.Rand
 			}
 			nextHLS = signalDeadline(nextHLS, started, time.Now(), intervals.hls)
 			if err != nil {
+				if temporaryPlaybackError(err) {
+					transientFailures++
+					if transientFailures < 3 {
+						delay := retryHLSDuration(intervals.hls, transientFailures, rnd)
+						nextHLS = time.Now().Add(delay)
+						w.st.addLog(fmt.Sprintf("канал %s: временный сбой HLS (%v; %.1f с), повтор %d/3 через %s; маяк продолжает работу", stream.Login, err, time.Since(started).Seconds(), transientFailures, delay.Round(time.Millisecond)))
+						continue
+					}
+				}
+				transientFailures = 0
 				w.st.addLog(fmt.Sprintf("канал %s: HLS не восстановлен (%v; %.1f с), переключаю канал", stream.Login, err, time.Since(started).Seconds()))
 				duration := w.excludeFailedChannel(stream.Login, err, rnd)
 				w.st.addLog(fmt.Sprintf("канал %s: пауза %s", stream.Login, duration))
 				streams.clear()
-				w.st.clearWatchRate()
 				variant = ""
 				continue
 			}
+			transientFailures = 0
 			if result.VariantURL != "" {
 				variant = result.VariantURL
 			}

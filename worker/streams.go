@@ -159,6 +159,19 @@ func (w *accountWorker) recoverSlowStream(ctx context.Context, rnd *rand.Rand, c
 func (w *accountWorker) openStreamExcept(ctx context.Context, rnd *rand.Rand, excluded string) (twitch.Stream, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, streamRecoveryBudget)
 	defer cancel()
+	// Limit only expensive recovery, never normal HLS/beacon/Inventory signals.
+	if w.m.recoverySlots != nil {
+		queued := time.Now()
+		select {
+		case w.m.recoverySlots <- struct{}{}:
+			if w.m.cfg.Diagnostics {
+				w.st.addLog(fmt.Sprintf("diagnostic recovery queue_ms=%d active=%d", time.Since(queued).Milliseconds(), len(w.m.recoverySlots)))
+			}
+			defer func() { <-w.m.recoverySlots }()
+		case <-ctx.Done():
+			return twitch.Stream{}, "", ctx.Err()
+		}
+	}
 	streams, err := w.gql.TopStreams(ctx, w.m.cfg.TargetGame, 15)
 	if err != nil {
 		return twitch.Stream{}, "", err
@@ -211,4 +224,19 @@ func (w *accountWorker) openStreamExcept(ctx context.Context, rnd *rand.Rand, ex
 		}
 	}
 	return twitch.Stream{}, "", &channelRetryError{attempts: attempts, retryAt: earliest}
+}
+
+// Stagger retries on the current stream before triggering expensive recovery.
+func retryHLSDuration(interval time.Duration, failures int, rnd *rand.Rand) time.Duration {
+	base := interval * time.Duration(failures)
+	if base > time.Minute {
+		base = time.Minute
+	}
+	return base + time.Duration(rnd.Int63n(maxInt64(1, int64(base/4))))
+}
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }

@@ -53,6 +53,7 @@ func (s *AccountState) addLog(line string) {
 }
 
 func (s *AccountState) addLogAt(at time.Time, line string) {
+	line = twitch.RedactLogLine(line)
 	stamped := at.Format("15:04:05") + " " + line
 	s.mu.Lock()
 	if len(s.logs) < maxLogLines {
@@ -104,14 +105,16 @@ type Manager struct {
 	rewardBatches map[rewardBatchKey]*rewardBatch
 	rewardWake    chan struct{}
 
-	started      time.Time
-	totalReady   atomic.Int64
-	currentGroup atomic.Int32
+	recoverySlots chan struct{}
+	started       time.Time
+	totalReady    atomic.Int64
+	currentGroup  atomic.Int32
 }
 
 func NewManager(cfg *config.Config, groups [][]*parser.Account, reloadCh chan struct{}, states ...*bot.PollState) *Manager {
 	m := &Manager{
 		cfg:           cfg,
+		recoverySlots: make(chan struct{}, 32),
 		groups:        groups,
 		states:        make(map[string]*AccountState),
 		accountGroup:  make(map[string]int),
@@ -134,7 +137,7 @@ func NewManager(cfg *config.Config, groups [][]*parser.Account, reloadCh chan st
 	for groupIndex, g := range groups {
 		for _, acc := range g {
 			logFile := ""
-			if cfg.LogDir != "" {
+			if cfg.LogDir != "" && !cfg.SingleLog {
 				logFile = filepath.Join(cfg.LogDir, acc.Login+".log")
 			}
 			m.states[acc.Login] = &AccountState{Account: acc, Status: "init", LogFile: logFile}

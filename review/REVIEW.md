@@ -205,3 +205,14 @@ The longer archive confirms all 250 accounts completed Random Charm at 240/240, 
 Added exact case-insensitive ignored_drop_names / IGNORED_DROP_NAMES, defaulting to Hunt White as requested. Excluded rewards are skipped before readiness counting and selection and therefore do not block the group. Other unknown-progress rewards are still considered unfinished. Both bots support /exclude (list), /exclude name (add), /include name (remove), with saved config and reload. Edits read the latest file, preserve comma-containing names via JSON arrays, reject control characters and fail clearly for an OS-level override. An empty list reverses the default exclusion. The list applies to all campaigns.
 
 Regression coverage includes four completed rewards plus an unknown catalog-only Hunt White, explicit re-inclusion, a different unknown reward that must not be skipped, config precedence/empty/malformed values, both bot command routes, reload on successful saves only, successive edits, and preservation of unrelated settings. Tests and go vet passed; no live bot commands were sent during verification.
+
+
+## 2026-11-05: 625-account outage recovery and test diagnostics
+
+The supplied snapshot covers 14:41–15:11. All 625 accounts had normal signals before a correlated timeout incident around 14:58. Repeated recovery added directory/token/playlist work; the logs cannot identify whether the initial constraint was local resources, the network path or Twitch.
+
+Temporary HLS failures now retry the existing stream twice with staggered waits, preserving beacons. Three consecutive temporary failures or a permanent failure switch channels. Only expensive recovery is limited to 32 concurrent operations; waiting is cancellable. Confirmed segment checks are reused within the current playlist window, with failed segments retried and cache state bounded to 512 entries. Overall status rates retain outages across switches. Master playlist errors retain their wrapped causes while hiding signed URLs, with a final URL redaction guard on account logging.
+
+Single-file append logging is the default. A bounded asynchronous writer collects service/account records into `LOG_DIR/tdm-light.log`, flushes every second and drains on graceful shutdown. Overflow is explicitly counted. No rotation is used, so a full test requires disk space; abrupt termination may lose the tail. Optional `DIAGNOSTICS=true` traces safe HTTP metadata/connection phases plus runtime memory, goroutines and GC. It never logs request headers, bodies or URLs and does not measure process CPU.
+
+Validation includes isolated stalled signals on 625 simulated accounts, bounded 625-account recovery/cancellation, transient-failure beacon continuity, HLS segment overlap/failure handling, signed-URL redaction, and concurrent single-file logging with a stalled destination. This is not a live validation of post-fix Twitch accrual.

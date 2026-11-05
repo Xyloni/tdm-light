@@ -11,6 +11,8 @@ import (
 
 // Config — вся конфигурация сервиса.
 type Config struct {
+	SingleLog               bool     `json:"single_log"`
+	Diagnostics             bool     `json:"diagnostics"`
 	BotPlatform             string   `json:"bot_platform"`
 	DiscordBotToken         string   `json:"discord_bot_token"`
 	DiscordAdminID          string   `json:"discord_admin_id"`
@@ -32,6 +34,7 @@ type Config struct {
 // Default возвращает конфигурацию с безопасными значениями по умолчанию.
 func Default() *Config {
 	return &Config{
+		SingleLog:               true,
 		IgnoredDropNames:        []string{"Hunt White"},
 		ClientID:                "kd1unb4b3q4t58fwlpcbzcbnm76a8fp", // Client-ID приложения Twitch для Android
 		AccountsFile:            "account.txt",
@@ -119,7 +122,7 @@ func applyOSEnv(cfg *Config) {
 		"TARGET_GAME", "CLIENT_ID", "TELEGRAM_BOT_TOKEN", "TELEGRAM_ADMIN_ID",
 		"IGNORED_DROP_NAMES",
 		"ACCOUNTS_FILE", "HEARTBEAT_INTERVAL_SEC", "CAMPAIGN_POLL_INTERVAL_SEC",
-		"JITTER_SEC", "GROUP_SESSION_MINUTES", "LOG_DIR", "USE_PUBSUB",
+		"JITTER_SEC", "GROUP_SESSION_MINUTES", "LOG_DIR", "USE_PUBSUB", "SINGLE_LOG", "DIAGNOSTICS",
 	} {
 		if v, ok := os.LookupEnv(k); ok {
 			applyKV(cfg, k, v)
@@ -180,6 +183,10 @@ func applyKV(cfg *Config, key, val string) {
 		if n, err := strconv.Atoi(val); err == nil {
 			cfg.GroupSessionMinutes = n
 		}
+	case "SINGLE_LOG":
+		cfg.SingleLog = val == "1" || strings.EqualFold(val, "true")
+	case "DIAGNOSTICS":
+		cfg.Diagnostics = val == "1" || strings.EqualFold(val, "true")
 	case "LOG_DIR":
 		cfg.LogDir = val
 	case "USE_PUBSUB":

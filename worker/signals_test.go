@@ -153,7 +153,7 @@ func Test250And500WorkersIsolateStalledSignals(t *testing.T) {
 		n       int
 		mode    string
 		blocked int
-	}{{250, "inventory", 2}, {500, "inventory", 2}, {500, "beacon", 1}, {500, "hls", 0}} {
+	}{{250, "inventory", 2}, {500, "inventory", 2}, {500, "beacon", 1}, {500, "hls", 0}, {625, "hls", 0}, {625, "beacon", 1}, {625, "inventory", 2}} {
 		t.Run(fmt.Sprintf("%d/%s", scenario.n, scenario.mode), func(t *testing.T) {
 			_, workers, probes := signalFixture(t, scenario.n, scenario.mode)
 			ctx, cancel := context.WithCancel(context.Background())
@@ -221,7 +221,7 @@ func TestHLSBudgetSwitchesAwayFromHangingChannel(t *testing.T) {
 	go func() {
 		done <- w.farmDropScheduled(ctx, rand.New(rand.NewSource(1)), twitch.Drop{ID: "drop", Required: 60}, watchIntervals{hls: 10 * time.Millisecond, beacon: 10 * time.Millisecond, progress: 10 * time.Millisecond, timeouts: operationTimeouts{hls: 35 * time.Millisecond, recovery: 100 * time.Millisecond}})
 	}()
-	for probes[0].calls[0].Load() < 2 && time.Since(started) < 500*time.Millisecond {
+	for probes[0].directories.Load() < 2 && time.Since(started) < 500*time.Millisecond {
 		time.Sleep(time.Millisecond)
 	}
 	elapsed := time.Since(started)

@@ -33,11 +33,21 @@ type GQLClient struct {
 	http      *http.Client
 	cfg       *config.Config
 	Account   *parser.Account
+	segments  map[string]struct{} // HLS owner only; last successfully checked window
 	spadeMu   sync.Mutex
 	spadeURLs map[string]string
 }
 
 func NewGQLClient(h *http.Client, cfg *config.Config, acc *parser.Account) *GQLClient {
+	if cfg.Diagnostics {
+		clone := *h
+		base := clone.Transport
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		clone.Transport = &diagnosticTransport{base: base, account: acc.Login}
+		h = &clone
+	}
 	return &GQLClient{http: h, cfg: cfg, Account: acc, spadeURLs: make(map[string]string)}
 }
 
@@ -56,6 +66,9 @@ func (c *GQLClient) do(ctx context.Context, operation, query string, variables m
 }
 
 func (c *GQLClient) doPayload(ctx context.Context, operation string, payload []byte, out any) error {
+	if c.cfg.Diagnostics {
+		ctx = context.WithValue(ctx, diagnosticOperationKey{}, operation)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, gqlURL, bytes.NewReader(payload))
 	if err != nil {
 		return err
@@ -415,7 +428,11 @@ func (c *GQLClient) PlaybackAccessToken(ctx context.Context, channelLogin string
 
 // GetMasterPlaylist скачивает master-плейлист (несколько КБ текста).
 func (c *GQLClient) GetMasterPlaylist(ctx context.Context, rawURL string) ([]byte, error) {
-	return c.getHLSPlaylist(ctx, rawURL, 256<<10)
+	body, err := c.getHLSPlaylist(ctx, rawURL, 256<<10)
+	if err != nil {
+		return nil, &playbackFailure{cause: err}
+	}
+	return body, nil
 }
 
 type HeartbeatResult struct {
@@ -572,9 +589,17 @@ func (c *GQLClient) watchPlaylistSegments(ctx context.Context, playlistURL strin
 	if len(segments) == 0 {
 		return fmt.Errorf("media playlist contains no segment URLs")
 	}
+	if len(segments) > 512 {
+		return fmt.Errorf("media playlist has too many segments")
+	}
+	checked := make(map[string]struct{}, len(segments))
 	for _, segmentURL := range segments {
 		if !hlsHostAllowed(segmentURL) {
 			return fmt.Errorf("HLS segment host rejected")
+		}
+		checked[segmentURL] = struct{}{}
+		if _, ok := c.segments[segmentURL]; ok {
+			continue
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodHead, segmentURL, nil)
 		if err != nil {
@@ -591,6 +616,7 @@ func (c *GQLClient) watchPlaylistSegments(ctx context.Context, playlistURL strin
 			return fmt.Errorf("HLS segment: HTTP %d", resp.StatusCode)
 		}
 	}
+	c.segments = checked
 	return nil
 }
 
@@ -777,3 +803,6 @@ func hostOnly(raw string) string {
 	}
 	return raw
 }
+
+// RedactLogLine is a final guard for signed URLs returned by transport errors.
+func RedactLogLine(line string) string { return heartbeatURLRE.ReplaceAllString(line, "<url>") }

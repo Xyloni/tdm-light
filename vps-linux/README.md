@@ -65,3 +65,6 @@ sudo systemctl restart tdm-light
 Бот поддерживает `/status`, `/logs <логин>`, `/game`, `/game <название>`, `/restart`, уведомления о наградах, `/exclude [название]`, `/include название` и загрузку `account.txt`. Команда `/game <название>` меняет игру и перезапускает майнер. Можно также изменить `TARGET_GAME` в `/opt/tdm-light/config.env` и выполнить `/restart`.
 
 Список аккаунтов и настройки бота хранятся на сервере с доступом только владельца файла. Ограничь SSH-доступ доверенными администраторами. Настройка приложения Discord и личных сообщений описана в основном README.
+
+
+Test logging / Логи теста: set / укажите `DIAGNOSTICS=true` and / и `SINGLE_LOG=true` in / в `config.env`, then restart / затем перезапустите службу. All accounts share / Все аккаунты пишут в `LOG_DIR/tdm-light.log` (default / по умолчанию `logs/tdm-light.log`). This file is appended without rotation / Файл дописывается без ротации. Disable diagnostics after testing / После теста отключите `DIAGNOSTICS`. Stop the service before archiving the full log / Перед архивацией полного лога остановите службу.

@@ -1,6 +1,8 @@
 {
   "target_game": "Hunt: Showdown 1896",
-  "ignored_drop_names": ["Hunt White"],
+  "ignored_drop_names": [
+    "Hunt White"
+  ],
   "client_id": "kd1unb4b3q4t58fwlpcbzcbnm76a8fp",
   "bot_platform": "",
   "discord_bot_token": "",
@@ -12,5 +14,7 @@
   "campaign_poll_interval_sec": 120,
   "jitter_sec": 20,
   "log_dir": "logs",
-  "use_pubsub": false
+  "use_pubsub": false,
+  "single_log": true,
+  "diagnostics": false
 }

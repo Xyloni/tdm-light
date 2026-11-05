@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"log"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
+	"time"
 
 	"github.com/xyloni/tdm-light/bot"
 	"github.com/xyloni/tdm-light/config"
@@ -56,11 +59,52 @@ func main() {
 			pollState = new(bot.PollState)
 			previousBotToken = cfg.TelegramBotToken
 		}
+		var combined io.WriteCloser
+		previousOutput := log.Writer()
+		if cfg.SingleLog && cfg.LogDir != "" {
+			combined, err = worker.OpenUnifiedLog(cfg.LogDir, previousOutput)
+			if err != nil {
+				log.Printf("единый лог недоступен: %v", err)
+			} else {
+				log.SetOutput(combined)
+			}
+		}
+		diagnosticCtx, stopDiagnostics := context.WithCancel(ctx)
+		diagnosticDone := make(chan struct{})
+		go func() {
+			defer close(diagnosticDone)
+			if !cfg.Diagnostics {
+				return
+			}
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-diagnosticCtx.Done():
+					return
+				case <-ticker.C:
+					var ms runtime.MemStats
+					runtime.ReadMemStats(&ms)
+					log.Printf("diagnostic runtime goroutines=%d heap_mb=%.1f heap_sys_mb=%.1f gc=%d gc_pause_total_ms=%.1f", runtime.NumGoroutine(), float64(ms.HeapAlloc)/(1<<20), float64(ms.HeapSys)/(1<<20), ms.NumGC, float64(ms.PauseTotalNs)/1e6)
+				}
+			}
+		}()
+		log.Printf("logging single=%t diagnostics=%t", cfg.SingleLog, cfg.Diagnostics)
 		mgr := worker.NewManager(cfg, groups, reloadCh, pollState)
-		if !mgr.Run(ctx) {
+		reload := mgr.Run(ctx)
+		stopDiagnostics()
+		<-diagnosticDone
+		if reload {
+			log.Println("горячая перезагрузка config.json и account.txt...")
+		} else {
+			log.Println("сервис остановлен")
+		}
+		log.SetOutput(previousOutput)
+		if combined != nil {
+			combined.Close()
+		}
+		if !reload {
 			break // shutdown
 		}
-		log.Println("горячая перезагрузка config.json и account.txt...")
 	}
-	log.Println("сервис остановлен")
 }
