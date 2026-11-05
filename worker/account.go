@@ -173,7 +173,7 @@ func (w *accountWorker) farmDropScheduled(parent context.Context, rnd *rand.Rand
 	transientFailures := 0
 	var overall watchRate
 	overall.reset(time.Now(), drop.Current, drop.ProgressKnown)
-	var rate watchRate
+	var rate, sustained watchRate
 	var rateStarted time.Time
 	handleProgress := func(result inventoryResult) bool {
 		if result.err != nil {
@@ -203,12 +203,18 @@ func (w *accountWorker) farmDropScheduled(parent context.Context, rnd *rand.Rand
 			return false
 		}
 		slow, gain, elapsed := rate.observe(result.checked, cur.Current, cur.ProgressKnown, 2*intervals.progress+time.Minute)
+		longSlow, longGain, longElapsed := sustained.observeSustained(result.checked, cur.Current, cur.ProgressKnown, 2*intervals.progress+time.Minute, gain, elapsed)
+		reason := "короткое окно"
+		if !slow && longSlow {
+			reason = "длительное окно"
+			slow, gain, elapsed = true, longGain, longElapsed
+		}
 		// Overall status includes playback outages and channel switches.
 		if slow && w.reserveRateRecovery(result.checked, rnd) {
 			w.st.mu.Lock()
 			w.st.rateRecoveries++
 			w.st.mu.Unlock()
-			w.st.addLog(fmt.Sprintf("медленное начисление на %s: +%d мин за %.1f мин; восстанавливаю просмотр", stream.Login, gain, elapsed.Minutes()))
+			w.st.addLog(fmt.Sprintf("медленное начисление на %s: +%d мин за %.1f мин (%s); восстанавливаю просмотр", stream.Login, gain, elapsed.Minutes(), reason))
 			recoveryCtx, stop := context.WithTimeout(ctx, budgets.recovery)
 			selected, playlist, err := w.recoverSlowStream(recoveryCtx, rnd, stream)
 			stop()
@@ -224,6 +230,7 @@ func (w *accountWorker) farmDropScheduled(parent context.Context, rnd *rand.Rand
 			}
 			rateStarted = time.Now()
 			rate.reset(rateStarted, cur.Current, cur.ProgressKnown)
+			sustained.reset(rateStarted, cur.Current, cur.ProgressKnown)
 		}
 		return false
 	}
@@ -278,6 +285,7 @@ func (w *accountWorker) farmDropScheduled(parent context.Context, rnd *rand.Rand
 			stream, variant = selected, playlist
 			rateStarted = time.Now()
 			rate.reset(rateStarted, drop.Current, drop.ProgressKnown)
+			sustained.reset(rateStarted, drop.Current, drop.ProgressKnown)
 			streams.set(stream)
 			nextHLS = time.Time{}
 			w.st.addLog("просмотр канала: " + stream.Login)

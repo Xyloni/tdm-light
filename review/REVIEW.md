@@ -216,3 +216,8 @@ Temporary HLS failures now retry the existing stream twice with staggered waits,
 Single-file append logging is the default. A bounded asynchronous writer collects service/account records into `LOG_DIR/tdm-light.log`, flushes every second and drains on graceful shutdown. Overflow is explicitly counted. No rotation is used, so a full test requires disk space; abrupt termination may lose the tail. Optional `DIAGNOSTICS=true` traces safe HTTP metadata/connection phases plus runtime memory, goroutines and GC. It never logs request headers, bodies or URLs and does not measure process CPU.
 
 Validation includes isolated stalled signals on 625 simulated accounts, bounded 625-account recovery/cancellation, transient-failure beacon continuity, HLS segment overlap/failure handling, signed-URL redaction, and concurrent single-file logging with a stalled destination. This is not a live validation of post-fix Twitch accrual.
+
+
+## 2026-11-05: sustained moderate accrual loss
+
+Added a separate 30–35 minute channel observation window for accrual below 90%, allowing one minute for rounding. It complements the existing short severe-loss detector. The latest short window must still be below 90% (with a half-minute recent-sample allowance), preventing an old outage from restarting recovered viewing. Recovery uses the existing shared 10–12 minute cooldown, channel selection/cancellation limits and manual reward claiming. Both channel histories reset on channel/reward changes or invalid observations; the independent overall status window is retained. Tests cover 75/85% loss, 90/100/105% healthy accrual, recovery after an earlier outage, invalid data and bounded long-run history.
