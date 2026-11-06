@@ -42,6 +42,38 @@ func TestDiagnosticsRedactsTransportSecretsAndClosesCounter(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsSummarizesSuccessfulSegmentsAndKeepsErrors(t *testing.T) {
+	var output bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&output)
+	defer log.SetOutput(old)
+	status := http.StatusOK
+	d := &diagnosticTransport{account: "fixture", base: reviewTransport(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: status, Body: http.NoBody}, nil
+	})}
+	req, err := http.NewRequest(http.MethodHead, "https://test.ttvnw.net/segment.ts", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		if i == 3 {
+			status = http.StatusNotFound
+		}
+		resp, err := d.RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+	FlushSegmentDiagnostics()
+	FlushSegmentDiagnostics()
+	got := output.String()
+	if strings.Count(got, "diagnostic http") != 1 || !strings.Contains(got, "status=404") ||
+		strings.Count(got, "diagnostic hls_segments success=3") != 1 {
+		t.Fatal(got)
+	}
+}
+
 func TestHLSChecksOnlyNewSegmentsAndDoesNotCacheFailedOnes(t *testing.T) {
 	playlist := "#EXTM3U\na.ts\nb.ts\n"
 	calls := map[string]int{}

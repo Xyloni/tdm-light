@@ -171,6 +171,8 @@ func (w *accountWorker) farmDropScheduled(parent context.Context, rnd *rand.Rand
 	nextOpen := time.Time{}
 	openFailures := 0
 	transientFailures := 0
+	hlsRetry := false
+	var retryQueuedAt time.Time
 	var overall watchRate
 	overall.reset(time.Now(), drop.Current, drop.ProgressKnown)
 	var rate, sustained watchRate
@@ -292,15 +294,34 @@ func (w *accountWorker) farmDropScheduled(parent context.Context, rnd *rand.Rand
 		}
 		if !time.Now().Before(nextHLS) {
 			started := time.Now()
+			if hlsRetry && !w.m.hlsRetries.tryStart(started) {
+				if retryQueuedAt.IsZero() {
+					retryQueuedAt = started
+				}
+				nextHLS = started.Add(time.Second + time.Duration(rnd.Int63n(int64(time.Second))))
+				continue
+			}
+			if !retryQueuedAt.IsZero() {
+				if w.m.cfg.Diagnostics {
+					w.st.addLog(fmt.Sprintf("diagnostic hls_retry queue_ms=%d", started.Sub(retryQueuedAt).Milliseconds()))
+				}
+				retryQueuedAt = time.Time{}
+				started = time.Now()
+			}
 			checkCtx, stop := context.WithTimeout(ctx, budgets.hls)
 			result, err := w.gql.WatchHLS(checkCtx, variant, stream)
 			stop()
+			if hlsRetry {
+				w.m.hlsRetries.finish()
+			}
 			if ctx.Err() != nil {
 				return nil
 			}
 			nextHLS = signalDeadline(nextHLS, started, time.Now(), intervals.hls)
 			if err != nil {
 				if temporaryPlaybackError(err) {
+					hlsRetry = true
+					w.m.hlsRetries.failed(time.Now())
 					transientFailures++
 					if transientFailures < 3 {
 						delay := retryHLSDuration(intervals.hls, transientFailures, rnd)
@@ -318,6 +339,7 @@ func (w *accountWorker) farmDropScheduled(parent context.Context, rnd *rand.Rand
 				continue
 			}
 			transientFailures = 0
+			hlsRetry = false
 			if result.VariantURL != "" {
 				variant = result.VariantURL
 			}

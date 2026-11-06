@@ -106,6 +106,7 @@ type Manager struct {
 	rewardWake    chan struct{}
 
 	recoverySlots chan struct{}
+	hlsRetries    hlsRetryGate
 	started       time.Time
 	totalReady    atomic.Int64
 	currentGroup  atomic.Int32

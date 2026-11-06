@@ -14,6 +14,7 @@ import (
 	"github.com/xyloni/tdm-light/bot"
 	"github.com/xyloni/tdm-light/config"
 	"github.com/xyloni/tdm-light/parser"
+	"github.com/xyloni/tdm-light/twitch"
 	"github.com/xyloni/tdm-light/worker"
 )
 
@@ -78,10 +79,14 @@ func main() {
 			}
 			ticker := time.NewTicker(30 * time.Second)
 			defer ticker.Stop()
+			segments := time.NewTicker(time.Minute)
+			defer segments.Stop()
 			for {
 				select {
 				case <-diagnosticCtx.Done():
 					return
+				case <-segments.C:
+					twitch.FlushSegmentDiagnostics()
 				case <-ticker.C:
 					var ms runtime.MemStats
 					runtime.ReadMemStats(&ms)
@@ -94,6 +99,9 @@ func main() {
 		reload := mgr.Run(ctx)
 		stopDiagnostics()
 		<-diagnosticDone
+		if cfg.Diagnostics {
+			twitch.FlushSegmentDiagnostics()
+		}
 		if reload {
 			log.Println("горячая перезагрузка config.json и account.txt...")
 		} else {

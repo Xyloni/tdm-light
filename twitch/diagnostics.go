@@ -18,6 +18,44 @@ type diagnosticOperationKey struct{}
 
 var diagnosticActive atomic.Int64
 
+type segmentStats struct {
+	count, reused, slow int64
+	total, max          time.Duration
+}
+
+var segmentDiagnostics struct {
+	sync.Mutex
+	stats segmentStats
+}
+
+func recordSegmentSuccess(elapsed time.Duration, reused bool) {
+	segmentDiagnostics.Lock()
+	defer segmentDiagnostics.Unlock()
+	stats := &segmentDiagnostics.stats
+	stats.count++
+	stats.total += elapsed
+	if elapsed > stats.max {
+		stats.max = elapsed
+	}
+	if elapsed >= time.Second {
+		stats.slow++
+	}
+	if reused {
+		stats.reused++
+	}
+}
+
+// FlushSegmentDiagnostics logs one summary and starts a new collection interval.
+func FlushSegmentDiagnostics() {
+	segmentDiagnostics.Lock()
+	stats := segmentDiagnostics.stats
+	segmentDiagnostics.stats = segmentStats{}
+	segmentDiagnostics.Unlock()
+	if stats.count != 0 {
+		log.Printf("diagnostic hls_segments success=%d reused=%d slow_ge_1s=%d avg_ms=%d max_ms=%d", stats.count, stats.reused, stats.slow, (stats.total / time.Duration(stats.count)).Milliseconds(), stats.max.Milliseconds())
+	}
+}
+
 // Never log URLs, headers, bodies, IP addresses or raw transport errors.
 type diagnosticTransport struct {
 	base    http.RoundTripper
@@ -64,6 +102,10 @@ func (d *diagnosticTransport) RoundTrip(r *http.Request) (*http.Response, error)
 		diagnosticActive.Add(-1)
 		mu.Lock()
 		defer mu.Unlock()
+		if bodyErr == nil && r.Method == http.MethodHead && status == http.StatusOK {
+			recordSegmentSuccess(time.Since(started), reused)
+			return
+		}
 		detail := "ok"
 		if bodyErr != nil {
 			detail = "transport_error"
