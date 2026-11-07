@@ -2,11 +2,31 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestSendAndWaitRespectsDeadlineWhileSenderBusy(t *testing.T) {
+	control := &stalledControl{started: make(chan struct{})}
+	service := NewService(control)
+	firstCtx, cancel := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- service.SendAndWait(firstCtx, "first") }()
+	<-control.started
+	finalCtx, stop := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer stop()
+	if err := service.SendAndWait(finalCtx, "shutdown"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("busy sender ignored final deadline", err)
+	}
+	cancel()
+	<-firstDone
+	if len(service.sendSlot) != 0 {
+		t.Fatal("sender slot leaked")
+	}
+}
 
 type stalledControl struct{ started chan struct{} }
 

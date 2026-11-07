@@ -20,10 +20,25 @@ type Control interface {
 type Service struct {
 	control  Control
 	queue    chan string
+	sendSlot chan struct{}
 	overflow atomic.Uint64
 }
 
-func NewService(c Control) *Service { return &Service{control: c, queue: make(chan string, 128)} }
+func NewService(c Control) *Service {
+	return &Service{control: c, queue: make(chan string, 128), sendSlot: make(chan struct{}, 1)}
+}
+
+// SendAndWait waits for delivery through the same serialized sender, bypassing
+// the best-effort notification queue. The caller supplies a shutdown deadline.
+func (s *Service) SendAndWait(ctx context.Context, message string) error {
+	select {
+	case s.sendSlot <- struct{}{}:
+		defer func() { <-s.sendSlot }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return s.control.Send(ctx, truncate(message, 1900))
+}
 
 func (s *Service) Notify(message string) {
 	message = truncate(message, 1000)
@@ -78,7 +93,7 @@ func (s *Service) notifications(ctx context.Context) {
 			message += fmt.Sprintf("\n\nЕщё уведомлений: %d. Подробности: /status и /logs.", lost)
 		}
 		attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		err := s.control.Send(attemptCtx, truncate(message, 1900))
+		err := s.SendAndWait(attemptCtx, message)
 		cancel()
 		if err != nil && ctx.Err() == nil {
 			// Details remain available in account logs/status even if delivery fails.

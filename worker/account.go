@@ -65,6 +65,7 @@ func (w *accountWorker) Run(ctx context.Context) {
 		drop, ok, err := w.nextDrop(ctx)
 		if err != nil {
 			errCount++
+			w.m.cycleErrors.Store(true)
 			if isAuthError(err) {
 				w.st.authFailed.Store(true)
 				w.st.setStatus("error: auth")
@@ -83,7 +84,9 @@ func (w *accountWorker) Run(ctx context.Context) {
 			w.st.addLog("нет активных дропов по «" + w.m.cfg.TargetGame + "», сессия завершена")
 			return
 		}
+		w.m.cycleWorked.Store(true)
 		if err := w.farmDrop(ctx, rnd, drop); err != nil && ctx.Err() == nil {
+			w.m.cycleErrors.Store(true)
 			w.st.addLog("фарм: " + err.Error())
 			if !sleepCtx(ctx, jittered(rnd, 30*time.Second, w.m.cfg.JitterSec)) {
 				return

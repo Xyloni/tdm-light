@@ -11,6 +11,8 @@ import (
 
 // Config — вся конфигурация сервиса.
 type Config struct {
+	StopWhenIdle            bool     `json:"stop_when_idle"`
+	IdleCheckRounds         int      `json:"idle_check_rounds"`
 	SingleLog               bool     `json:"single_log"`
 	Diagnostics             bool     `json:"diagnostics"`
 	BotPlatform             string   `json:"bot_platform"`
@@ -35,6 +37,7 @@ type Config struct {
 func Default() *Config {
 	return &Config{
 		SingleLog:               true,
+		IdleCheckRounds:         3,
 		IgnoredDropNames:        []string{"Hunt White"},
 		ClientID:                "kd1unb4b3q4t58fwlpcbzcbnm76a8fp", // Client-ID приложения Twitch для Android
 		AccountsFile:            "account.txt",
@@ -71,6 +74,9 @@ func loadSettings(jsonPath, envPath string) (*Config, error) {
 
 	applyEnvFile(cfg, envPath)
 	applyOSEnv(cfg)
+	if cfg.IdleCheckRounds < 1 || cfg.IdleCheckRounds > 100 {
+		return nil, fmt.Errorf("IDLE_CHECK_ROUNDS: используйте число от 1 до 100")
+	}
 	if cfg.ignoredDropParseErr != nil {
 		return nil, cfg.ignoredDropParseErr
 	}
@@ -120,7 +126,7 @@ func applyOSEnv(cfg *Config) {
 	for _, k := range []string{
 		"BOT_PLATFORM", "DISCORD_BOT_TOKEN", "DISCORD_ADMIN_ID",
 		"TARGET_GAME", "CLIENT_ID", "TELEGRAM_BOT_TOKEN", "TELEGRAM_ADMIN_ID",
-		"IGNORED_DROP_NAMES",
+		"IGNORED_DROP_NAMES", "STOP_WHEN_IDLE", "IDLE_CHECK_ROUNDS",
 		"ACCOUNTS_FILE", "HEARTBEAT_INTERVAL_SEC", "CAMPAIGN_POLL_INTERVAL_SEC",
 		"JITTER_SEC", "GROUP_SESSION_MINUTES", "LOG_DIR", "USE_PUBSUB", "SINGLE_LOG", "DIAGNOSTICS",
 	} {
@@ -132,6 +138,12 @@ func applyOSEnv(cfg *Config) {
 
 func applyKV(cfg *Config, key, val string) {
 	switch strings.ToUpper(key) {
+	case "STOP_WHEN_IDLE":
+		cfg.StopWhenIdle = val == "1" || strings.EqualFold(val, "true")
+	case "IDLE_CHECK_ROUNDS":
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.IdleCheckRounds = n
+		}
 	case "BOT_PLATFORM":
 		cfg.BotPlatform = val
 	case "DISCORD_BOT_TOKEN":

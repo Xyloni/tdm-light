@@ -107,6 +107,8 @@ type Manager struct {
 
 	recoverySlots chan struct{}
 	hlsRetries    hlsRetryGate
+	cycleWorked   atomic.Bool
+	cycleErrors   atomic.Bool
 	started       time.Time
 	totalReady    atomic.Int64
 	currentGroup  atomic.Int32
@@ -222,10 +224,17 @@ func (m *Manager) Run(parent context.Context) (reloaded bool) {
 		}
 	}
 
+	return m.runCycles(ctx, time.Duration(maxInt(m.cfg.CampaignPollIntervalSec, 60))*time.Second)
+}
+
+func (m *Manager) runCycles(ctx context.Context, interval time.Duration) bool {
+	idleRounds := 0
 	for {
+		m.cycleWorked.Store(false)
+		m.cycleErrors.Store(false)
 		cycleStarted := time.Now()
 		for gi, group := range m.groups {
-			if parent.Err() != nil {
+			if ctx.Err() != nil {
 				return false
 			}
 			m.currentGroup.Store(int32(gi + 1))
@@ -233,13 +242,46 @@ func (m *Manager) Run(parent context.Context) (reloaded bool) {
 			if m.runGroup(ctx, group) {
 				return true // reload
 			}
-			if parent.Err() != nil {
+			if ctx.Err() != nil {
 				return false
 			}
 			log.Printf("группа %d/%d: воркеры завершили работу; переход к следующей группе", gi+1, len(m.groups))
 		}
-		// Completed or unauthorized groups must not cause an immediate retry loop.
-		timer := time.NewTimer(time.Until(cycleStarted.Add(time.Duration(maxInt(m.cfg.CampaignPollIntervalSec, 60)) * time.Second)))
+		if m.cycleWorked.Load() || m.cycleErrors.Load() {
+			idleRounds = 0
+		} else if m.cfg.StopWhenIdle {
+			idleRounds++
+			log.Printf("доступного фарма нет: проверка всех групп %d/%d", idleRounds, maxInt(m.cfg.IdleCheckRounds, 1))
+			if idleRounds >= maxInt(m.cfg.IdleCheckRounds, 1) {
+				select {
+				case <-m.reloadCh:
+					return true
+				case <-ctx.Done():
+					return false
+				default:
+				}
+				log.Println("STOP_WHEN_IDLE: проверки завершены, майнер останавливается")
+				if m.bot != nil {
+					message := fmt.Sprintf("Майнер завершает работу автоматически.\nДоступного фарма нет после %d полных проверок всех групп.\nАккаунтов: %d, групп: %d.", idleRounds, len(m.states), len(m.groups))
+					notifyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+					err := m.bot.SendAndWait(notifyCtx, message)
+					cancel()
+					if err != nil {
+						log.Println("[bot] сообщение об автовыключении не доставлено")
+					} else {
+						log.Println("[bot] сообщение об автовыключении отправлено")
+					}
+				}
+				select {
+				case <-m.reloadCh:
+					return true
+				default:
+				}
+				return false
+			}
+		}
+		// Completed groups must not cause an immediate retry loop.
+		timer := time.NewTimer(time.Until(cycleStarted.Add(interval)))
 		select {
 		case <-ctx.Done():
 			timer.Stop()

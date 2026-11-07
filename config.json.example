@@ -16,5 +16,7 @@
   "log_dir": "logs",
   "use_pubsub": false,
   "single_log": true,
-  "diagnostics": false
+  "diagnostics": false,
+  "stop_when_idle": false,
+  "idle_check_rounds": 3
 }
