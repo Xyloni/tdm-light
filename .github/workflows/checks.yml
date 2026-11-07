@@ -27,3 +27,4 @@ jobs:
         run: |
           bash -n deploy/install-vps.sh vps/install.sh vps/update.sh
           docker compose -f vps/compose.yaml config --quiet
+          sudo bash .github/test-vps.sh
