@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/xyloni/tdm-light/config"
@@ -61,7 +62,11 @@ func saveTargetGame(filePath, game string) error {
 	return updateEnvSetting(filePath, "TARGET_GAME", game)
 }
 
+var envWriteMu sync.Mutex
+
 func updateEnvSetting(filePath, key, value string) error {
+	envWriteMu.Lock()
+	defer envWriteMu.Unlock()
 	value = strings.TrimSpace(value)
 	if value == "" || strings.ContainsAny(value, "\r\n") {
 		return fmt.Errorf("название игры пустое или содержит перевод строки")

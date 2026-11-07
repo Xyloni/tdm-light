@@ -110,6 +110,7 @@ The bot accepts commands from the configured administrator. Discord commands wor
 
 | Command | Action |
 | --- | --- |
+| `/settings` | Edit settings with buttons, apply now or after the current group |
 | `/status` | Show accounts, crediting speed, lagging accounts, recovery attempts, and ready rewards |
 | `/logs <login>` | Show logs for an account |
 | `/game` | Show or choose the target game |
@@ -338,3 +339,16 @@ The selected bot receives a shutdown message with the reason, check count, and a
 **Русский:** Укажите `STOP_WHEN_IDLE=true` и `IDLE_CHECK_ROUNDS=3` в `config.env` (для Docker — в `.env`). После завершения фарма майнер выполняет три последовательных полных проверки всех групп без доступных незавершённых наград и штатно завершает работу. Количество проверок можно задать от 1 до 100. Обнаружение награды или ошибка сбрасывают счётчик. Используется `CAMPAIGN_POLL_INTERVAL_SEC` с минимальным интервалом цикла 60 секунд и обычным распределением запуска аккаунтов. Цикл, в котором выполнялся фарм, не считается пустой проверкой. По умолчанию опция отключена, программа продолжает искать новые награды. При изначально пустом списке аккаунтов программа ожидает загрузку.
 
 Выбранный бот получает сообщение с причиной автовыключения, числом проверок, аккаунтов и групп. Ожидание отправки ограничено 30 секундами, включая уже выполняющуюся отправку. При недоступности бота ошибка записывается в лог и остановка продолжается. Бот останавливается вместе с майнером. Для продолжения запустите программу или службу заново. Docker Compose использует `restart: on-failure`, как служба VPS, чтобы штатное завершение оставляло контейнер остановленным. Для существующего контейнера нужно применить политику перезапуска через пересоздание.
+
+
+### Bot settings / Настройки бота
+
+Use `/settings` in Telegram or the Discord bot DM. Buttons edit `STOP_WHEN_IDLE`, `IDLE_CHECK_ROUNDS` (1–100), `DIAGNOSTICS` and `SINGLE_LOG`. Values are saved atomically in `config.env`; active and saved values are shown separately when they differ. Choose **Apply now** to reload groups immediately, or **After group** to wait for the current group to finish. Bot credentials are never displayed. Process environment overrides are reported as locked. Game and reward exclusions use the existing `/game`, `/exclude` and `/include` commands. Text input is supported as `/settings KEY VALUE` (Discord: `/settings action:KEY VALUE`).
+
+Команда `/settings` доступна в Telegram и личке Discord. Кнопки меняют `STOP_WHEN_IDLE`, `IDLE_CHECK_ROUNDS` (1–100), `DIAGNOSTICS` и `SINGLE_LOG`. Значения атомарно сохраняются в `config.env`; при отличии отображаются активное и сохранённое значения. Кнопка **Применить сейчас** перезагружает обработку групп, **После группы** ждёт завершения текущей группы. Токены и ID владельца в меню не показываются. Параметры, закреплённые окружением процесса, помечаются как недоступные для изменения. Игра и исключения используют `/game`, `/exclude` и `/include`. Для текстового ввода используется `/settings KEY VALUE` (Discord: `/settings action:KEY VALUE`). Сохранённые значения также применяются при следующем запуске программы.
+
+### Prebuilt VPS installer / VPS-установщик готового образа
+
+The image-based installer, manual updates and rollback are documented in [vps/README.md](vps/README.md). Credentials and bot-editable settings stay in `data/config.env`. GitHub publishes amd64/arm64 images only after successful checks. The deployment uses no automatic updater.
+
+Установка готового образа, ручное обновление и откат описаны в [vps/README.md](vps/README.md). Данные бота и редактируемые настройки хранятся в `data/config.env`. Образы amd64/arm64 публикуются GitHub после успешных проверок. Обновления запускаются вручную.

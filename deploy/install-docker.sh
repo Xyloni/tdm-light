@@ -62,6 +62,20 @@ set_setting() {
   mv -f -- "$tmp" "$file"
 }
 
+# Move editable options out of container environment overrides.
+for key in STOP_WHEN_IDLE IDLE_CHECK_ROUNDS DIAGNOSTICS SINGLE_LOG; do
+  value="$(get_setting "$env_file" "$key")"
+  if [[ -n "$value" ]]; then
+    if [[ -z "$(get_setting "$game_file" "$key")" ]]; then set_setting "$game_file" "$key" "$value"; fi
+    tmp="$(mktemp "$repo_root/.env-migrate.XXXXXX")"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      if [[ "$line" != "$key="* ]]; then printf '%s\n' "$line" >> "$tmp"; fi
+    done < "$env_file"
+    chmod 600 "$tmp"
+    mv -f -- "$tmp" "$env_file"
+  fi
+done
+
 platform="$(get_setting "$env_file" BOT_PLATFORM)"
 if [[ -z "$platform" ]]; then
   if [[ -n "$(get_setting "$env_file" TELEGRAM_BOT_TOKEN)" && -n "$(get_setting "$env_file" TELEGRAM_ADMIN_ID)" ]]; then

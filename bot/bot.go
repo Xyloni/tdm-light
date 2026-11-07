@@ -30,10 +30,11 @@ type PollState struct {
 // Bot — минимальный Telegram-бот на long polling.
 // Команды принимаются только от администратора (adminID).
 type Bot struct {
-	token     string
-	adminID   int64
-	http      *http.Client
-	pollState *PollState
+	settingsFn func(string) (SettingsPanel, bool)
+	token      string
+	adminID    int64
+	http       *http.Client
+	pollState  *PollState
 
 	statusFn      func() string
 	logsFn        func(login string) string
@@ -83,7 +84,7 @@ func (b *Bot) Run(ctx context.Context) {
 }
 
 func (b *Bot) poll(ctx context.Context) error {
-	u := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates?offset=%d&timeout=25&allowed_updates=%%5B%%22message%%22%%5D",
+	u := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates?offset=%d&timeout=25&allowed_updates=%%5B%%22message%%22,%%22callback_query%%22%%5D",
 		b.token, b.pollState.offset.Load())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -98,7 +99,8 @@ func (b *Bot) poll(ctx context.Context) error {
 	var res struct {
 		OK     bool `json:"ok"`
 		Result []struct {
-			UpdateID int64 `json:"update_id"`
+			UpdateID int64                     `json:"update_id"`
+			Callback *telegramSettingsCallback `json:"callback_query"`
 			Message  *struct {
 				Text     string            `json:"text"`
 				Document *telegramDocument `json:"document"`
@@ -122,6 +124,14 @@ func (b *Bot) poll(ctx context.Context) error {
 			continue
 		}
 		b.pollState.offset.Store(upd.UpdateID + 1)
+		if callback := upd.Callback; callback != nil {
+			if callback.From.ID == b.adminID && callback.Message.Chat.ID == b.adminID && callback.Message.Chat.Type == "private" && strings.HasPrefix(callback.Data, "settings:") {
+				if b.settingsRequest(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": callback.ID}) == nil {
+					b.handleSettings(ctx, strings.TrimPrefix(callback.Data, "settings:"))
+				}
+			}
+			continue
+		}
 		msg := upd.Message
 		if msg == nil || msg.From.ID != b.adminID {
 			continue
@@ -142,6 +152,8 @@ func (b *Bot) handle(ctx context.Context, text string, document *telegramDocumen
 	}
 	cmd := strings.ToLower(strings.SplitN(fields[0], "@", 2)[0])
 	switch cmd {
+	case "/settings":
+		b.handleSettings(ctx, strings.TrimSpace(text[len(fields[0]):]))
 	case "/exclude", "/include":
 		name := strings.TrimSpace(text[len(fields[0]):])
 		response, reload := exclusionCommand(name, cmd == "/exclude", b.excludedFn, b.setExcludedFn)
@@ -194,7 +206,7 @@ func (b *Bot) handle(ctx context.Context, text string, document *telegramDocumen
 	}
 }
 
-const helpText = "Команды:\n/status — сводка фарма\n/logs <login> — последние логи аккаунта\n/game — показать текущую игру\n/game <название> — сменить игру и перезапустить майнинг\n/exclude [название] — показать список или исключить награду\n/include <название> — вернуть награду\n/restart — перечитать конфиг и account.txt\n\nЧтобы загрузить аккаунты, отправьте любой .txt документом. Файл будет проверен, сохранён как account.txt и майнинг перезапустится."
+const helpText = "Команды:\n/settings — настройки и применение изменений\n/status — сводка фарма\n/logs <login> — последние логи аккаунта\n/game — показать текущую игру\n/game <название> — сменить игру и перезапустить майнинг\n/exclude [название] — показать список или исключить награду\n/include <название> — вернуть награду\n/restart — перечитать конфиг и account.txt\n\nЧтобы загрузить аккаунты, отправьте любой .txt документом. Файл будет проверен, сохранён как account.txt и майнинг перезапустится."
 
 func (b *Bot) handleAccountsDocument(ctx context.Context, fileID, fileName string, fileSize int64) {
 	if !strings.EqualFold(path.Ext(fileName), ".txt") || strings.ContainsAny(fileName, `/\\`) {

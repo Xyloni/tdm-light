@@ -17,6 +17,7 @@ import (
 )
 
 type Actions struct {
+	Settings    func(string) (SettingsPanel, bool)
 	Status      func() string
 	Logs        func(string) string
 	Reload      func()
@@ -49,8 +50,9 @@ type discordInteraction struct {
 		} `json:"user"`
 	} `json:"member"`
 	Data struct {
-		Name    string `json:"name"`
-		Options []struct {
+		Name     string `json:"name"`
+		CustomID string `json:"custom_id"`
+		Options  []struct {
 			Name  string          `json:"name"`
 			Value json.RawMessage `json:"value"`
 		} `json:"options"`
@@ -139,7 +141,7 @@ func (d *Discord) directChannel(ctx context.Context) (string, error) {
 }
 
 func (d *Discord) accept(i discordInteraction) bool {
-	return i.Type == 2 && i.User.ID == d.admin && i.GuildID == "" && i.Member.User.ID == "" &&
+	return (i.Type == 2 || (i.Type == 3 && strings.HasPrefix(i.Data.CustomID, "settings:"))) && i.User.ID == d.admin && i.GuildID == "" && i.Member.User.ID == "" &&
 		(i.Context == nil || *i.Context == 1) && config.Snowflake(i.ChannelID) &&
 		config.Snowflake(i.ID) && config.Snowflake(i.ApplicationID) && i.Token != ""
 }
@@ -205,8 +207,18 @@ func (d *Discord) execute(ctx context.Context) {
 			return
 		case i := <-d.commands:
 			commandCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			text, reload := d.command(commandCtx, i)
-			if err := d.reply(commandCtx, i, text); err != nil && ctx.Err() == nil {
+			var text string
+			var reload bool
+			var replyErr error
+			if isSettingsInteraction(i) && d.actions.Settings != nil {
+				panel, changed := d.actions.Settings(discordSettingsAction(i))
+				reload = changed
+				replyErr = d.replySettings(commandCtx, i, panel)
+			} else {
+				text, reload = d.command(commandCtx, i)
+				replyErr = d.reply(commandCtx, i, text)
+			}
+			if replyErr != nil && ctx.Err() == nil {
 				log.Println("[discord] ответ на команду не доставлен")
 			}
 			cancel()
@@ -232,6 +244,12 @@ func (d *Discord) command(ctx context.Context, i discordInteraction) (string, bo
 		return ""
 	}
 	switch i.Data.Name {
+	case "settings":
+		if d.actions.Settings == nil {
+			return "Настройки недоступны.", false
+		}
+		panel, reload := d.actions.Settings(discordSettingsAction(i))
+		return panel.Text, reload
 	case "exclude":
 		return exclusionCommand(option("name"), true, d.actions.Excluded, d.actions.SetExcluded)
 	case "include":
@@ -268,7 +286,7 @@ func (d *Discord) command(ctx context.Context, i discordInteraction) (string, bo
 		}
 		return "account.txt проверен и сохранён. Перезапускаю фарм.", true
 	default:
-		return "Команды: /status, /logs login, /game [name], /exclude [name], /include name, /restart, /accounts file. Управление доступно только владельцу в личке бота.", false
+		return "Команды: /settings, /status, /logs login, /game [name], /exclude [name], /include name, /restart, /accounts file. Управление доступно только владельцу в личке бота.", false
 	}
 }
 
@@ -313,6 +331,7 @@ func discordCommands() []map[string]any {
 		name, description string
 		options           []map[string]any
 	}{
+		{"settings", "Settings / Настройки", []map[string]any{{"type": 3, "name": "action", "description": "Optional: KEY VALUE or apply now / apply after", "max_length": 100}}},
 		{"help", "Show commands / Команды", nil}, {"status", "Farm status / Статус фарма", nil},
 		{"logs", "Account logs / Логи аккаунта", []map[string]any{{"type": 3, "name": "login", "description": "Account login", "required": true}}},
 		{"game", "Show or change target game / Целевая игра", []map[string]any{{"type": 3, "name": "name", "description": "Target game", "max_length": 200}}},

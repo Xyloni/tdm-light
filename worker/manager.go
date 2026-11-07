@@ -105,13 +105,15 @@ type Manager struct {
 	rewardBatches map[rewardBatchKey]*rewardBatch
 	rewardWake    chan struct{}
 
-	recoverySlots chan struct{}
-	hlsRetries    hlsRetryGate
-	cycleWorked   atomic.Bool
-	cycleErrors   atomic.Bool
-	started       time.Time
-	totalReady    atomic.Int64
-	currentGroup  atomic.Int32
+	recoverySlots  chan struct{}
+	hlsRetries     hlsRetryGate
+	settingsMu     sync.Mutex
+	deferredReload atomic.Bool
+	cycleWorked    atomic.Bool
+	cycleErrors    atomic.Bool
+	started        time.Time
+	totalReady     atomic.Int64
+	currentGroup   atomic.Int32
 }
 
 func NewManager(cfg *config.Config, groups [][]*parser.Account, reloadCh chan struct{}, states ...*bot.PollState) *Manager {
@@ -147,7 +149,7 @@ func NewManager(cfg *config.Config, groups [][]*parser.Account, reloadCh chan st
 			m.accountGroup[acc.Login] = groupIndex
 		}
 	}
-	actions := bot.Actions{Status: m.statusText, Logs: m.logsText, Reload: func() {
+	actions := bot.Actions{Settings: func(action string) (bot.SettingsPanel, bool) { return m.settingsAt("config.env", action) }, Status: m.statusText, Logs: m.logsText, Reload: func() {
 		select {
 		case m.reloadCh <- struct{}{}:
 		default:
@@ -164,6 +166,7 @@ func NewManager(cfg *config.Config, groups [][]*parser.Account, reloadCh chan st
 		if cfg.TelegramBotToken != "" && cfg.TelegramAdminID != 0 {
 			telegram := bot.New(cfg.TelegramBotToken, cfg.TelegramAdminID, actions.Status, actions.Logs, actions.Reload, actions.Game, actions.SetGame, actions.Upload, states...)
 			telegram.ConfigureExclusions(actions.Excluded, actions.SetExcluded)
+			telegram.ConfigureSettings(actions.Settings)
 			m.bot = bot.NewService(telegram)
 		} else {
 			log.Println("[bot] Telegram отключён: заполните TELEGRAM_BOT_TOKEN и TELEGRAM_ADMIN_ID")
@@ -244,6 +247,10 @@ func (m *Manager) runCycles(ctx context.Context, interval time.Duration) bool {
 			}
 			if ctx.Err() != nil {
 				return false
+			}
+			if m.deferredReload.Swap(false) {
+				log.Println("применяю настройки после завершения группы")
+				return true
 			}
 			log.Printf("группа %d/%d: воркеры завершили работу; переход к следующей группе", gi+1, len(m.groups))
 		}

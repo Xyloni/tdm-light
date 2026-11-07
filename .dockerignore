@@ -7,6 +7,9 @@ config.env
 config.json
 logs
 data
+vps/data
+vps/.env
+vps/.previous-image
 dropfarm.exe
 dropfarm-vps-ubuntu.tar.gz
 vps-linux/dropfarm-linux-*

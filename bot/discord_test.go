@@ -168,7 +168,7 @@ func TestDiscordCommandsAndRegistration(t *testing.T) {
 			t.Fatalf("%s %s %v", name, text, reload)
 		}
 	}
-	if len(discordCommands()) != 8 {
+	if len(discordCommands()) != 9 {
 		t.Fatal("missing command")
 	}
 	for _, command := range discordCommands() {
