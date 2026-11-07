@@ -28,29 +28,29 @@ TwitchDrops Miner Light is a Go application that watches live channels for a sel
 
 ### 🚀 Quick start on Ubuntu VPS
 
-On Ubuntu with Docker Engine, the Docker Compose plugin, and `sudo` access, run:
+On Ubuntu with Docker Engine, the Docker Compose plugin, and sudo access:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Xyloni/tdm-light/main/deploy/bootstrap-docker.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Xyloni/tdm-light/main/deploy/install-vps.sh -o /tmp/tdm-light-install.sh
+sudo bash /tmp/tdm-light-install.sh
 ```
 
-The bootstrap script downloads the project to `/opt/tdm-light`, offers Telegram or Discord, asks for the chosen bot token, administrator user ID, and target game, then builds and starts the container. Docker must already be installed; the script stops with an install hint if Docker or Compose is missing. After startup, upload any `.txt` document to Telegram or use Discord `/accounts file`;  it is saved as `account.txt` after validation (maximum 2 MiB).
+The installer downloads a prebuilt amd64/arm64 image and creates `/opt/tdm-light-vps`. Choose Telegram or Discord and enter your bot token, user ID and target game. Upload a `.txt` account file through the bot (Discord uses `/accounts`). Configure automatic shutdown, diagnostics and logging through `/settings`. Persistent files stay in `data`.
 
-> Updates currently use a source build on the VPS. Apply them with `git pull` and rebuild the container:
+Update manually after choosing a suitable time:
 
 ```bash
-cd /opt/tdm-light
-sudo git pull
-sudo docker compose up -d --build
+cd /opt/tdm-light-vps
+sudo bash update.sh
 ```
-
-Useful commands:
 
 | Action | Command |
 | --- | --- |
-| Follow logs | `cd /opt/tdm-light && sudo docker compose logs -f tdm-light` |
-| Restart | `cd /opt/tdm-light && sudo docker compose restart tdm-light` |
-| Check status | `cd /opt/tdm-light && sudo docker compose ps` |
+| Follow logs | `cd /opt/tdm-light-vps && sudo docker compose -f compose.yaml logs -f tdm-light` |
+| Start after automatic shutdown | `cd /opt/tdm-light-vps && sudo docker compose -f compose.yaml start` |
+| Roll back | `cd /opt/tdm-light-vps && sudo bash update.sh --rollback` |
+
+See [the VPS guide](vps/README.md) for version pinning, backups and requirements. Existing source-build installations can continue using `git pull` and `docker compose up -d --build` in their own directory.
 
 ### 🪟 Run on Windows
 
@@ -178,29 +178,29 @@ TwitchDrops Miner Light — приложение на Go для просмотр
 
 ### 🚀 Быстрая установка на Ubuntu VPS
 
-На Ubuntu VPS с установленными Docker Engine, плагином Docker Compose и доступом `sudo` выполни:
+На Ubuntu VPS с установленными Docker Engine, плагином Compose и доступом sudo:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Xyloni/tdm-light/main/deploy/bootstrap-docker.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Xyloni/tdm-light/main/deploy/install-vps.sh -o /tmp/tdm-light-install.sh
+sudo bash /tmp/tdm-light-install.sh
 ```
 
-Скрипт скачает проект в `/opt/tdm-light`, предложит Telegram или Discord, запросит токен выбранного бота, user ID администратора и целевую игру, затем соберёт и запустит контейнер. Docker должен быть установлен заранее; если Docker или Compose не найдены, скрипт завершится и попросит установить их. После запуска отправь любой `.txt` документом в Telegram или через `/accounts file` в Discord: после проверки он сохранится как `account.txt` (максимум 2 МиБ).
+Установщик скачает готовый образ amd64/arm64 и создаст `/opt/tdm-light-vps`. Выбери Telegram или Discord, введи токен, свой user ID и игру. Загрузи `.txt` через бота (Discord использует `/accounts`). Автовыключение, диагностика и логирование меняются через `/settings`. Постоянные файлы хранятся в `data`.
 
-> Сейчас обновление выполняется сборкой исходников на самом VPS. Чтобы установить обновления, выполни `git pull` и пересобери контейнер:
+Обновление запускается вручную в выбранное тобой время:
 
 ```bash
-cd /opt/tdm-light
-sudo git pull
-sudo docker compose up -d --build
+cd /opt/tdm-light-vps
+sudo bash update.sh
 ```
-
-Полезные команды:
 
 | Действие | Команда |
 | --- | --- |
-| Смотреть логи | `cd /opt/tdm-light && sudo docker compose logs -f tdm-light` |
-| Перезапустить | `cd /opt/tdm-light && sudo docker compose restart tdm-light` |
-| Проверить статус | `cd /opt/tdm-light && sudo docker compose ps` |
+| Логи | `cd /opt/tdm-light-vps && sudo docker compose -f compose.yaml logs -f tdm-light` |
+| Запуск после автовыключения | `cd /opt/tdm-light-vps && sudo docker compose -f compose.yaml start` |
+| Откат | `cd /opt/tdm-light-vps && sudo bash update.sh --rollback` |
+
+Подробности, закрепление версии и резервное копирование описаны в [инструкции VPS](vps/README.md). Прежние установки из исходников можно обновлять через `git pull` и `docker compose up -d --build` в их собственном каталоге.
 
 ### 🪟 Запуск в Windows
 
@@ -332,11 +332,11 @@ Persistent moderate loss / Устойчивое умеренное отстав�
 
 ### Automatic shutdown / Автовыключение
 
-**English:** Set `STOP_WHEN_IDLE=true` and `IDLE_CHECK_ROUNDS=3` in `config.env` (Docker uses `.env`). After farming finishes, the miner performs three consecutive full checks of every account group with no available unfinished reward, then exits normally. The count is configurable from 1 to 100. Finding a reward or encountering an error resets confirmations. Checks use `CAMPAIGN_POLL_INTERVAL_SEC` with a minimum cycle interval of 60 seconds and retain the usual staggered account startup. A cycle that performed farming does not count as an empty confirmation. With the option disabled (default), the miner continues checking for new rewards. An initially empty account list keeps waiting for upload.
+**English:** Set `STOP_WHEN_IDLE=true` and `IDLE_CHECK_ROUNDS=3` in `config.env` (Docker uses `data/config.env`). After farming finishes, the miner performs three consecutive full checks of every account group with no available unfinished reward, then exits normally. The count is configurable from 1 to 100. Finding a reward or encountering an error resets confirmations. Checks use `CAMPAIGN_POLL_INTERVAL_SEC` with a minimum cycle interval of 60 seconds and retain the usual staggered account startup. A cycle that performed farming does not count as an empty confirmation. With the option disabled (default), the miner continues checking for new rewards. An initially empty account list keeps waiting for upload.
 
 The selected bot receives a shutdown message with the reason, check count, and account/group counts. Shutdown waits up to 30 seconds for sending, including any in-flight notification. A delivery failure is logged and shutdown proceeds. Bot control stops together with the miner. Start the program/service again to resume. Docker Compose now uses `restart: on-failure`, matching the VPS service, so a clean automatic exit stays stopped. Existing Docker deployments must recreate the container to apply the restart policy.
 
-**Русский:** Укажите `STOP_WHEN_IDLE=true` и `IDLE_CHECK_ROUNDS=3` в `config.env` (для Docker — в `.env`). После завершения фарма майнер выполняет три последовательных полных проверки всех групп без доступных незавершённых наград и штатно завершает работу. Количество проверок можно задать от 1 до 100. Обнаружение награды или ошибка сбрасывают счётчик. Используется `CAMPAIGN_POLL_INTERVAL_SEC` с минимальным интервалом цикла 60 секунд и обычным распределением запуска аккаунтов. Цикл, в котором выполнялся фарм, не считается пустой проверкой. По умолчанию опция отключена, программа продолжает искать новые награды. При изначально пустом списке аккаунтов программа ожидает загрузку.
+**Русский:** Укажите `STOP_WHEN_IDLE=true` и `IDLE_CHECK_ROUNDS=3` в `config.env` (для Docker — в `data/config.env`). После завершения фарма майнер выполняет три последовательных полных проверки всех групп без доступных незавершённых наград и штатно завершает работу. Количество проверок можно задать от 1 до 100. Обнаружение награды или ошибка сбрасывают счётчик. Используется `CAMPAIGN_POLL_INTERVAL_SEC` с минимальным интервалом цикла 60 секунд и обычным распределением запуска аккаунтов. Цикл, в котором выполнялся фарм, не считается пустой проверкой. По умолчанию опция отключена, программа продолжает искать новые награды. При изначально пустом списке аккаунтов программа ожидает загрузку.
 
 Выбранный бот получает сообщение с причиной автовыключения, числом проверок, аккаунтов и групп. Ожидание отправки ограничено 30 секундами, включая уже выполняющуюся отправку. При недоступности бота ошибка записывается в лог и остановка продолжается. Бот останавливается вместе с майнером. Для продолжения запустите программу или службу заново. Docker Compose использует `restart: on-failure`, как служба VPS, чтобы штатное завершение оставляло контейнер остановленным. Для существующего контейнера нужно применить политику перезапуска через пересоздание.
 
